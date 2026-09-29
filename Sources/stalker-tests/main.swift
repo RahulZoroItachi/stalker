@@ -316,6 +316,78 @@ import StalkerCore
         t.expect(false, "store tests ran without throwing", "\(error)")
     }
 
+    // --- Task 7: reconciler and gap detection ---
+    func mkSample(at: Int, bundle: String?, ctx: String?, kind: Kind = .app,
+                  input: Bool = true, eng: Bool = false) -> Sample {
+        Sample(at: at, kind: kind, bundleId: bundle, appName: bundle,
+               contextKind: ctx == nil ? nil : .url, context: ctx, title: nil,
+               hadInput: input, engaged: eng)
+    }
+
+    let openIv = makeInterval(from: mkSample(at: 1000, bundle: "com.google.Chrome", ctx: "a.com/x"))
+    t.eq(decide(open: nil, sample: mkSample(at: 1000, bundle: "x", ctx: nil), samplePeriod: 30),
+         Transition.openFirst, "no open interval opens the first one")
+    t.eq(decide(open: openIv, sample: mkSample(at: 1030, bundle: "com.google.Chrome", ctx: "a.com/x"),
+                samplePeriod: 30),
+         Transition.bump, "same key bumps")
+    t.eq(decide(open: openIv, sample: mkSample(at: 1030, bundle: "com.apple.Notes", ctx: nil),
+                samplePeriod: 30),
+         Transition.closeAndOpen, "different app closes and opens")
+    t.eq(decide(open: openIv, sample: mkSample(at: 1030, bundle: "com.google.Chrome", ctx: "b.com/y"),
+                samplePeriod: 30),
+         Transition.closeAndOpen, "same app, different context closes and opens")
+
+    // The spec's motivating case: lid closed at 18:00, opened at 09:00 must NOT
+    // become one fifteen-hour interval of whatever was last in focus. Spec §6.4.
+    t.eq(decide(open: openIv, sample: mkSample(at: 1000 + 54000, bundle: "com.google.Chrome",
+                                               ctx: "a.com/x"), samplePeriod: 30),
+         Transition.gapThenOpen(from: 1000, to: 55000), "a long jump produces a gap, not a giant interval")
+
+    // Boundary: exactly 2x the period is still contiguous; one second more is a gap.
+    t.eq(decide(open: openIv, sample: mkSample(at: 1060, bundle: "com.google.Chrome", ctx: "a.com/x"),
+                samplePeriod: 30),
+         Transition.bump, "exactly 2x period still bumps")
+    t.eq(decide(open: openIv, sample: mkSample(at: 1061, bundle: "com.google.Chrome", ctx: "a.com/x"),
+                samplePeriod: 30),
+         Transition.gapThenOpen(from: 1000, to: 1061), "one second past 2x period is a gap")
+
+    // End-to-end through the store.
+    do {
+        let store = try Store(path: ":memory:")
+        try store.migrate()
+        let r = Reconciler(store: store, samplePeriod: 30)
+
+        try r.ingest(mkSample(at: 1000, bundle: "com.google.Chrome", ctx: "a.com/x", input: true))
+        try r.ingest(mkSample(at: 1030, bundle: "com.google.Chrome", ctx: "a.com/x", input: true))
+        try r.ingest(mkSample(at: 1060, bundle: "com.google.Chrome", ctx: "a.com/x",
+                              input: false, eng: true))
+        t.eq(r.open?.samples, 3, "three ticks accumulate into one interval")
+        t.eq(r.open?.active, 2, "active counts only ticks with input")
+        t.eq(r.open?.engaged, 1, "engaged counts only ticks with media playing")
+        t.eq(r.open?.endedAt, 1060, "ended_at follows the latest tick")
+
+        try r.ingest(mkSample(at: 1090, bundle: "com.mitchellh.ghostty", ctx: "/Users/alex/Work/x"))
+        t.eq(r.open?.bundleId, "com.mitchellh.ghostty", "app change opens a new interval")
+        t.eq(r.open?.samples, 1, "new interval starts its counters at one")
+
+        let all = try store.intervals(from: 0, to: 99999)
+        t.eq(all.count, 2, "two intervals persisted, not five rows")
+
+        // Gap row is written, and the pre-gap interval is not stretched.
+        try r.ingest(mkSample(at: 1090 + 54000, bundle: "com.mitchellh.ghostty", ctx: "/Users/alex/Work/x"))
+        let withGap = try store.intervals(from: 0, to: 999999)
+        t.expect(withGap.contains { $0.kind == .gap }, "a gap row is written")
+        if let g = withGap.first(where: { $0.kind == .gap }) {
+            t.eq(g.startedAt, 1090, "gap starts where the previous interval ended")
+            t.eq(g.endedAt, 55090, "gap ends at the returning tick")
+        }
+        if let ghostty = withGap.first(where: { $0.bundleId == "com.mitchellh.ghostty" }) {
+            t.eq(ghostty.endedAt, 1090, "pre-gap interval was not stretched across the gap")
+        }
+    } catch {
+        t.expect(false, "reconciler store tests ran without throwing", "\(error)")
+    }
+
     return t.summary()
 }
 
