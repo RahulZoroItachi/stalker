@@ -726,6 +726,30 @@ import StalkerMac
         t.expect(false, "live AX probe had a frontmost app to query")
     }
 
+    // --- Task 14: paths and argument parsing ---
+    let paths = Paths.standard(home: "/Users/alex")
+    t.eq(paths.dataDir, "/Users/alex/Library/Application Support/stalker", "data dir path")
+    t.eq(paths.dbPath, "/Users/alex/Library/Application Support/stalker/stalker.db", "db path")
+    t.eq(paths.courierDir, "/Users/alex/Library/Application Support/stalker/shell", "courier dir path")
+    t.eq(paths.rulesPath, "/Users/alex/.config/stalker/rules.toml", "rules path is under .config")
+
+    t.eq(parseArgs(["sample"]), Command.sample, "parses sample")
+    t.eq(parseArgs(["doctor"]), Command.doctor, "parses doctor")
+    t.eq(parseArgs(["report"]), Command.report(date: nil), "parses report with no date")
+    t.eq(parseArgs(["report", "--date", "2026-09-30"]), Command.report(date: "2026-09-30"),
+         "parses report with a date")
+    t.eq(parseArgs([]), Command.help, "no arguments yields help")
+    t.eq(parseArgs(["bogus"]), Command.help, "unknown command yields help")
+    t.eq(parseArgs(["report", "--date"]), Command.help, "--date with no value yields help")
+
+    let utc = TimeZone(identifier: "UTC")!
+    let r = dayRange("2026-09-30", now: 0, timeZone: utc)
+    t.eq(r.to - r.from, 86_400, "an explicit date spans exactly one day")
+    let today = dayRange(nil, now: 1_790_000_000, timeZone: utc)
+    t.expect(today.from <= 1_790_000_000 && 1_790_000_000 < today.to,
+             "a nil date spans the day containing now")
+    t.eq(today.from % 86_400, 0, "UTC day starts on a day boundary")
+
     return t.summary()
 }
 
