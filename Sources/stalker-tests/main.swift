@@ -388,6 +388,53 @@ import StalkerCore
         t.expect(false, "reconciler store tests ran without throwing", "\(error)")
     }
 
+    // --- Task 8: courier reader ---
+    t.eq(parseCourierLine("1790704439 /Users/alex/Desktop/Casey/Work/PM_Assistant"),
+         CourierReading(at: 1790704439, cwd: "/Users/alex/Desktop/Casey/Work/PM_Assistant"),
+         "parses a normal courier line")
+
+    // Review Focus 1: splitting on every space would truncate the cwd to its
+    // first word, and the directory rule would then never match.
+    t.eq(parseCourierLine("1790704439 /Users/alex/Library/Application Support/thing"),
+         CourierReading(at: 1790704439, cwd: "/Users/alex/Library/Application Support/thing"),
+         "a path containing spaces survives intact")
+    t.eq(parseCourierLine("1790704439 /a/b c d/e")?.cwd, "/a/b c d/e",
+         "splits on the first space only")
+
+    t.eq(parseCourierLine("1790704439 /x\n")?.cwd, "/x", "trailing newline is trimmed")
+    t.eq(parseCourierLine("nodigits /x"), nil, "non-numeric timestamp returns nil")
+    t.eq(parseCourierLine("1790704439"), nil, "line with no path returns nil")
+    t.eq(parseCourierLine(""), nil, "empty line returns nil")
+    t.eq(parseCourierLine("1790704439 "), nil, "blank path returns nil")
+
+    let readings = [
+        CourierReading(at: 1000 - 400, cwd: "/Users/alex/Desktop/Casey/Work/PM_Assistant"),
+        CourierReading(at: 1000 - 12,  cwd: "/Users/alex/Desktop/Casey/Projects/stalker"),
+        CourierReading(at: 1000 - 90,  cwd: "/Users/alex/Desktop/Casey/Work/Analytics"),
+    ]
+    t.eq(newestReading(readings, now: 1000, maxAgeSecs: 86_400)?.cwd,
+         "/Users/alex/Desktop/Casey/Projects/stalker",
+         "newest reading wins — this is the focused-shell attribution rule")
+    t.eq(newestReading(readings, now: 1_000_000, maxAgeSecs: 86_400), nil,
+         "readings older than the max age are ignored")
+    t.eq(newestReading([], now: 1000, maxAgeSecs: 86_400), nil, "empty input returns nil")
+
+    // Directory read against real files.
+    do {
+        let dir = NSTemporaryDirectory() + "stalker-courier-test-\(Int(Date().timeIntervalSince1970))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try "900 /Users/alex/Work/old".write(toFile: dir + "/ttys000", atomically: true, encoding: .utf8)
+        try "988 /Users/alex/Projects/new".write(toFile: dir + "/ttys001", atomically: true, encoding: .utf8)
+        try "garbage".write(toFile: dir + "/ttys002", atomically: true, encoding: .utf8)
+        t.eq(readCourierDir(dir, now: 1000, maxAgeSecs: 86_400)?.cwd, "/Users/alex/Projects/new",
+             "directory read picks the newest valid file and skips garbage")
+        try FileManager.default.removeItem(atPath: dir)
+        t.eq(readCourierDir(dir, now: 1000, maxAgeSecs: 86_400), nil,
+             "missing directory returns nil rather than throwing")
+    } catch {
+        t.expect(false, "courier directory test ran without throwing", "\(error)")
+    }
+
     return t.summary()
 }
 
