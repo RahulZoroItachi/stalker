@@ -1,4 +1,5 @@
 import ApplicationServices
+import Cocoa
 import Foundation
 import StalkerCore
 import StalkerMac
@@ -792,6 +793,54 @@ import StalkerMac
     } else {
         t.expect(false, "default rules are readable")
     }
+
+    // --- Task 16: browser AppleScript fallback ---
+    let browsers = browserBundleIds
+
+    t.eq(shouldFallBack(primary: .none, bundleId: "com.google.Chrome", browserBundleIds: browsers),
+         true, "AX returning nothing for a browser falls back to AppleScript")
+    t.eq(shouldFallBack(primary: .none, bundleId: "com.apple.Notes", browserBundleIds: browsers),
+         false, "a non-browser does not fall back")
+    t.eq(shouldFallBack(primary: .value(.url, "a.com/x", title: nil),
+                        bundleId: "com.google.Chrome", browserBundleIds: browsers),
+         false, "a successful AX result is not second-guessed")
+    t.eq(shouldFallBack(primary: .value(.title, "Some Window", title: "Some Window"),
+                        bundleId: "com.google.Chrome", browserBundleIds: browsers),
+         true, "a browser yielding only a title still falls back to get the URL")
+
+    // Deliberate: a denied grant must NOT be papered over by the fallback.
+    // Recording `denied` is the only way a revoked permission stays visible.
+    t.eq(shouldFallBack(primary: .denied, bundleId: "com.google.Chrome", browserBundleIds: browsers),
+         false, "denied is reported, never silently replaced by the fallback")
+
+    t.eq(shouldFallBack(primary: .none, bundleId: nil, browserBundleIds: browsers),
+         false, "a nil bundle id cannot be a known browser")
+
+    // Live: Automation to Chrome is already granted, so if Chrome is running this
+    // returns a real URL. If Chrome is not running, nil is the correct answer.
+    let asProbe = BrowserAppleScriptProbe()
+    let chromeRunning = NSWorkspace.shared.runningApplications
+        .contains { $0.bundleIdentifier == "com.google.Chrome" }
+    let liveURL = asProbe.url(bundleId: "com.google.Chrome")
+    if chromeRunning {
+        t.expect(liveURL != nil, "AppleScript returns a URL for a running Chrome (\(liveURL ?? "nil"))")
+    } else {
+        t.eq(liveURL, nil, "AppleScript returns nil when Chrome is not running")
+    }
+
+    // An unknown application must not hang or crash the tick.
+    t.eq(asProbe.url(bundleId: "com.example.NotAnApp"), nil,
+         "an unknown bundle id returns nil rather than hanging")
+
+    // Composite probe: falls through to the fallback and normalises the result.
+    struct NoneProbe: ContextProbe {
+        func context(for focus: FocusInfo) -> ContextResult { .none }
+    }
+    let composite = FallbackContextProbe(primary: NoneProbe(), fallback: asProbe,
+                                         browserBundleIds: browsers)
+    let notesResult = composite.context(for: FocusInfo(bundleId: "com.apple.Notes",
+                                                      appName: "Notes", pid: 1))
+    t.eq(notesResult, ContextResult.none, "composite returns none for a non-browser")
 
     return t.summary()
 }

@@ -27,7 +27,9 @@ func makeProbes() -> Probes {
            idle: SystemIdleProbe(),
            lock: SystemLockProbe(),
            engagement: PowerAssertionProbe(),
-           context: AccessibilityContextProbe(),
+           context: FallbackContextProbe(primary: AccessibilityContextProbe(),
+                                         fallback: BrowserAppleScriptProbe(),
+                                         browserBundleIds: browserBundleIds),
            courier: DirectoryCourierProbe(dir: paths.courierDir))
 }
 
