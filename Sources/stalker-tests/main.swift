@@ -57,6 +57,25 @@ import StalkerCore
     fake.advance(30)
     t.eq(fake.now, 1030, "FakeClock advances")
 
+    // --- Task 3: URL normalisation ---
+    t.eq(normalizeURL("https://docs.google.com/document/d/1Wkwi7yo/edit?tab=t.0"),
+         "docs.google.com/document/d/1Wkwi7yo/edit", "strips scheme and query")
+    t.eq(normalizeURL("https://www.youtube.com/watch?v=m36qlrBAMTo"),
+         "www.youtube.com/watch", "strips video id query")
+    t.eq(normalizeURL("https://github.com/a/b#readme"), "github.com/a/b", "strips fragment")
+    t.eq(normalizeURL("http://example.com/p?q=1#frag"), "example.com/p", "strips both")
+    t.eq(normalizeURL("https://example.com/path"), "example.com/path", "passthrough")
+
+    // Review Focus 2: a bare host must gain a trailing slash, else `host/*` never matches it.
+    t.eq(normalizeURL("https://youtube.com"), "youtube.com/", "bare host gains trailing slash")
+    t.eq(normalizeURL("https://youtube.com/"), "youtube.com/", "explicit root stays root")
+    t.expect(globMatches("youtube.com/*", normalizeURL("https://youtube.com") ?? ""),
+             "bare host matches host/* glob")
+
+    t.eq(normalizeURL("https://user:pw@example.com/p"), "example.com/p", "strips userinfo")
+    t.eq(normalizeURL("not a url"), nil, "unparseable returns nil")
+    t.eq(normalizeURL(""), nil, "empty returns nil")
+
     return t.summary()
 }
 
