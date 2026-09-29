@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import StalkerCore
 import StalkerMac
@@ -687,6 +688,43 @@ import StalkerMac
     let liveEngaged = PowerAssertionProbe().isEngaged(pid: livePid)
     t.expect(liveEngaged == true || liveEngaged == false,
              "power assertion probe runs against the live system (engaged=\(liveEngaged))")
+
+    // --- Task 13: context classification ---
+    t.eq(classifyContextValue(axURL: "https://docs.google.com/document/d/1Wk/edit?tab=t.0",
+                              axDocument: nil, axTitle: "Doc"),
+         ContextResult.value(.url, "docs.google.com/document/d/1Wk/edit", title: "Doc"),
+         "a URL wins and is normalised to host+path")
+    t.eq(classifyContextValue(axURL: nil, axDocument: "file:///Users/alex/Desktop/paper.pdf",
+                              axTitle: "paper.pdf"),
+         ContextResult.value(.file, "/Users/alex/Desktop/paper.pdf", title: "paper.pdf"),
+         "a document file URL becomes a plain path")
+    t.eq(classifyContextValue(axURL: nil, axDocument: nil, axTitle: "✳ Claude Code"),
+         ContextResult.value(.title, "✳ Claude Code", title: "✳ Claude Code"),
+         "window title is the fallback context")
+    t.eq(classifyContextValue(axURL: nil, axDocument: nil, axTitle: nil),
+         ContextResult.none,
+         "nothing available yields none, which is distinct from denied")
+    t.eq(classifyContextValue(axURL: nil, axDocument: nil, axTitle: ""),
+         ContextResult.none,
+         "an empty title is treated as nothing, not as an empty context")
+    t.eq(classifyContextValue(axURL: "not a url", axDocument: nil, axTitle: "Some Window"),
+         ContextResult.value(.title, "Some Window", title: "Some Window"),
+         "an unparseable URL falls through to the title rather than storing garbage")
+
+    // Live probe. Accessibility is expected NOT to be granted before install
+    // step 7, so this must report denied rather than crash or hang.
+    let axProbe = AccessibilityContextProbe()
+    if let f = SystemFocusProbe().frontmost() {
+        let result = axProbe.context(for: f)
+        if AXIsProcessTrusted() {
+            t.expect(result != .denied, "AX granted: probe returns a real result")
+        } else {
+            t.eq(result, ContextResult.denied,
+                 "AX not granted: probe reports denied, never silently nil")
+        }
+    } else {
+        t.expect(false, "live AX probe had a frontmost app to query")
+    }
 
     return t.summary()
 }
