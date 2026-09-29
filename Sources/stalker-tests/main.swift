@@ -507,6 +507,113 @@ import StalkerCore
     t.expect(text.contains("TOTALS"), "rendered report has a totals section")
     t.expect(text.contains("unclear"), "rendered report surfaces unclear time")
 
+    // --- Task 10: the tick ---
+    struct FakeFocus: FocusProbe {
+        let info: FocusInfo?
+        func frontmost() -> FocusInfo? { info }
+    }
+    struct FakeIdle: IdleProbe {
+        let secs: Double
+        func inputIdleSeconds() -> Double { secs }
+    }
+    struct FakeLock: LockProbe {
+        let locked: Bool
+        func isScreenLocked() -> Bool { locked }
+    }
+    struct FakeEngagement: EngagementProbe {
+        let engagedFlag: Bool
+        func isEngaged(pid: Int32) -> Bool { engagedFlag }
+    }
+    struct FakeContext: ContextProbe {
+        let result: ContextResult
+        func context(for focus: FocusInfo) -> ContextResult { result }
+    }
+    struct FakeCourier: CourierProbe {
+        let reading: CourierReading?
+        func newest(now: Int) -> CourierReading? { reading }
+    }
+
+    let cfg = TickConfig(samplePeriod: 30, idleThreshold: 180,
+                         terminalBundleIds: ["com.mitchellh.ghostty"])
+    let chrome = FocusInfo(bundleId: "com.google.Chrome", appName: "Google Chrome", pid: 21090)
+    let edge = FocusInfo(bundleId: "com.microsoft.edgemac", appName: "Microsoft Edge", pid: 1958)
+    let ghostty = FocusInfo(bundleId: "com.mitchellh.ghostty", appName: "Ghostty", pid: 3065)
+
+    func probes(_ f: FocusInfo?, idle: Double, locked: Bool = false, engaged: Bool = false,
+                ctx: ContextResult = .none, courier: CourierReading? = nil) -> Probes {
+        Probes(focus: FakeFocus(info: f), idle: FakeIdle(secs: idle), lock: FakeLock(locked: locked),
+               engagement: FakeEngagement(engagedFlag: engaged), context: FakeContext(result: ctx),
+               courier: FakeCourier(reading: courier))
+    }
+
+    // Locked screen beats everything else.
+    t.eq(makeSample(now: 1000, previous: nil, config: cfg,
+                    probes: probes(chrome, idle: 5, locked: true)).kind,
+         Kind.locked, "locked screen yields kind locked")
+
+    // No frontmost app at all (login window) is missing data, not activity.
+    t.eq(makeSample(now: 1000, previous: nil, config: cfg, probes: probes(nil, idle: 5)).kind,
+         Kind.gap, "no frontmost app yields kind gap")
+
+    // Normal typing.
+    let typing = makeSample(now: 1000, previous: nil, config: cfg,
+                            probes: probes(chrome, idle: 5,
+                                           ctx: .value(.url, "docs.google.com/d/1/edit", title: "Doc")))
+    t.eq(typing.kind, Kind.app, "active use yields kind app")
+    t.eq(typing.hadInput, true, "input within the sample period counts as input")
+    t.eq(typing.engaged, false, "engagement is not checked while actively typing")
+    t.eq(typing.context, "docs.google.com/d/1/edit", "context is captured while active")
+    t.eq(typing.contextKind, ContextKind.url, "context kind is url for a browser")
+
+    // Idle with nothing playing.
+    let away = makeSample(now: 1000, previous: nil, config: cfg,
+                          probes: probes(chrome, idle: 300, engaged: false,
+                                         ctx: .value(.url, "docs.google.com/d/1/edit", title: nil)))
+    t.eq(away.kind, Kind.idle, "no input past the threshold and nothing playing yields idle")
+    t.eq(away.hadInput, false, "no input in this period")
+
+    // The YouTube case: no input for minutes, but a video is playing.
+    let watching = makeSample(now: 1000, previous: nil, config: cfg,
+                              probes: probes(edge, idle: 600, engaged: true,
+                                             ctx: .value(.url, "www.youtube.com/watch", title: nil)))
+    t.eq(watching.kind, Kind.app, "media playing keeps a no-input tick out of idle")
+    t.eq(watching.engaged, true, "engagement is recorded")
+    t.eq(watching.hadInput, false, "watching is not input")
+
+    // A terminal takes its context from the courier, not the context probe.
+    let term = makeSample(now: 1000, previous: nil, config: cfg,
+                          probes: probes(ghostty, idle: 5, ctx: .value(.title, "ignored", title: nil),
+                                         courier: CourierReading(at: 995, cwd: "/Users/alex/Work/x")))
+    t.eq(term.contextKind, ContextKind.cwd, "terminal context kind is cwd")
+    t.eq(term.context, "/Users/alex/Work/x", "terminal context comes from the courier")
+
+    // A terminal with no courier file falls back to the context probe.
+    let termNoCourier = makeSample(now: 1000, previous: nil, config: cfg,
+                                   probes: probes(ghostty, idle: 5,
+                                                  ctx: .value(.title, "Claude Code", title: nil)))
+    t.eq(termNoCourier.contextKind, ContextKind.title,
+         "terminal with no courier reading falls back to the window title")
+
+    // Revoked permission must be distinguishable from "no context to read".
+    t.eq(makeSample(now: 1000, previous: nil, config: cfg,
+                    probes: probes(chrome, idle: 5, ctx: .denied)).contextKind,
+         ContextKind.denied, "denied permission is recorded as denied, not nil")
+    t.eq(makeSample(now: 1000, previous: nil, config: cfg,
+                    probes: probes(chrome, idle: 5, ctx: .none)).contextKind,
+         nil, "an app with no context yields nil context kind")
+
+    // Continuing idle must NOT re-query, and must carry context forward.
+    // If it returned nil context the IntervalKey would change every tick and the
+    // reconciler would open a new interval each time.
+    let firstIdle = makeSample(now: 1000, previous: typing, config: cfg,
+                               probes: probes(chrome, idle: 300,
+                                              ctx: .value(.url, "docs.google.com/d/1/edit", title: nil)))
+    let secondIdle = makeSample(now: 1030, previous: firstIdle, config: cfg,
+                                probes: probes(chrome, idle: 330, ctx: .none))
+    t.eq(secondIdle.context, "docs.google.com/d/1/edit",
+         "continuing idle carries the captured context forward")
+    t.eq(firstIdle.key, secondIdle.key, "consecutive idle ticks share one interval key")
+
     return t.summary()
 }
 
