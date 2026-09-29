@@ -169,6 +169,76 @@ import StalkerCore
         t.expect(false, "tier toml parses")
     }
 
+    // --- Task 5: rule matching ---
+    func mkInterval(bundle: String?, name: String?, ctx: String?) -> Interval {
+        Interval(id: nil, kind: .app, startedAt: 0, endedAt: 30,
+                 bundleId: bundle, appName: name, contextKind: ctx == nil ? nil : .url,
+                 context: ctx, title: nil, samples: 1, active: 1, engaged: 0)
+    }
+
+    let rsToml = """
+    default = "unclear"
+
+    [[rule]]
+    app = "com.google.Chrome"
+    category = "work"
+
+    [[rule]]
+    app = "com.microsoft.edgemac"
+    category = "fun"
+
+    [[rule]]
+    app_name = "Google Meet"
+    category = "work"
+
+    [[rule]]
+    context = "*/Casey/Work/*"
+    category = "work"
+
+    [[rule]]
+    context = "*/Casey/Projects/*"
+    category = "pet-project"
+
+    [[rule]]
+    app = "com.google.Chrome"
+    context = "youtube.com/*"
+    category = "fun"
+    """
+    let rs = try! parseRules(rsToml, homeDirectory: "/Users/alex")
+
+    t.eq(classify(mkInterval(bundle: "com.google.Chrome", name: "Google Chrome",
+                             ctx: "docs.google.com/document/d/1/edit"), with: rs),
+         "work", "Chrome classifies as work")
+    t.eq(classify(mkInterval(bundle: "com.microsoft.edgemac", name: "Microsoft Edge",
+                             ctx: "www.youtube.com/watch"), with: rs),
+         "fun", "Edge classifies as fun")
+
+    // PWA: opaque bundle id, matched by name instead.
+    t.eq(classify(mkInterval(bundle: "com.google.Chrome.app.kjgfgldnnfoeklkmfkjfagphfepbbdan",
+                             name: "Google Meet", ctx: nil), with: rs),
+         "work", "Google Meet classifies by app_name despite opaque bundle id")
+
+    // Context-only rules are app-independent: same rule serves terminal cwd.
+    t.eq(classify(mkInterval(bundle: "com.mitchellh.ghostty", name: "Ghostty",
+                             ctx: "/Users/alex/Desktop/Casey/Work/PM_Assistant"), with: rs),
+         "work", "Work directory classifies as work")
+    t.eq(classify(mkInterval(bundle: "com.mitchellh.ghostty", name: "Ghostty",
+                             ctx: "/Users/alex/Desktop/Casey/Projects/stalker"), with: rs),
+         "pet-project", "Projects directory classifies as pet-project")
+
+    // Tier 1 beats tier 3: the specific youtube-in-Chrome rule wins over Chrome=work.
+    t.eq(classify(mkInterval(bundle: "com.google.Chrome", name: "Google Chrome",
+                             ctx: "youtube.com/watch"), with: rs),
+         "fun", "tier 1 app+context rule beats tier 3 app-only rule")
+
+    t.eq(classify(mkInterval(bundle: "com.tinyspeck.slackmacgap", name: "Slack", ctx: nil), with: rs),
+         "unclear", "unmatched falls through to default, never guessed")
+
+    // A rule naming only app must not match a different app.
+    t.expect(!matches(Rule(app: "com.google.Chrome", appName: nil, context: nil, category: "work"),
+                      mkInterval(bundle: "com.apple.Notes", name: "Notes", ctx: nil)),
+             "app rule does not match a different bundle id")
+
     return t.summary()
 }
 
