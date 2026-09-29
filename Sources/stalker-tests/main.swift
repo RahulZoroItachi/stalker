@@ -239,6 +239,83 @@ import StalkerCore
                       mkInterval(bundle: "com.apple.Notes", name: "Notes", ctx: nil)),
              "app rule does not match a different bundle id")
 
+    // --- Task 6: store ---
+    do {
+        let store = try Store(path: ":memory:")
+        try store.migrate()
+        t.expect(true, "migrate succeeds on a fresh database")
+        t.eq(try store.lastInterval() == nil, true, "fresh database has no last interval")
+
+        var iv = Interval(id: nil, kind: .app, startedAt: 1000, endedAt: 1000,
+                          bundleId: "com.google.Chrome", appName: "Google Chrome",
+                          contextKind: .url, context: "docs.google.com/d/1/edit",
+                          title: "Doc", samples: 1, active: 1, engaged: 0)
+        let rowid = try store.insert(iv)
+        t.expect(rowid > 0, "insert returns a rowid")
+        iv.id = rowid
+
+        if let back = try store.lastInterval() {
+            t.eq(back.bundleId, "com.google.Chrome", "round-trips bundle id")
+            t.eq(back.context, "docs.google.com/d/1/edit", "round-trips context")
+            t.eq(back.contextKind, ContextKind.url, "round-trips context kind")
+            t.eq(back.samples, 1, "round-trips samples")
+            t.eq(back.id, rowid, "round-trips id")
+        } else {
+            t.expect(false, "lastInterval returns the inserted row")
+        }
+
+        // Bump in place: ended_at and counters move, no new row.
+        iv.endedAt = 1030; iv.samples = 2; iv.active = 2; iv.engaged = 1
+        try store.update(iv)
+        if let back = try store.lastInterval() {
+            t.eq(back.endedAt, 1030, "update bumps ended_at")
+            t.eq(back.samples, 2, "update bumps samples")
+            t.eq(back.engaged, 1, "update bumps engaged")
+            t.eq(back.id, rowid, "update does not create a new row")
+        } else {
+            t.expect(false, "lastInterval after update")
+        }
+
+        // Nullable columns survive a round trip as nil, distinct from "".
+        let bare = Interval(id: nil, kind: .gap, startedAt: 2000, endedAt: 3000,
+                            bundleId: nil, appName: nil, contextKind: nil,
+                            context: nil, title: nil, samples: 0, active: 0, engaged: 0)
+        _ = try store.insert(bare)
+        if let back = try store.lastInterval() {
+            t.eq(back.kind, Kind.gap, "round-trips gap kind")
+            t.eq(back.bundleId == nil, true, "nil bundle id stays nil, not empty string")
+            t.eq(back.contextKind == nil, true, "nil context kind stays nil")
+        } else {
+            t.expect(false, "lastInterval for gap row")
+        }
+
+        // Range query.
+        let rows = try store.intervals(from: 900, to: 1500)
+        t.eq(rows.count, 1, "range query filters by time")
+        t.eq(rows.first?.bundleId, "com.google.Chrome", "range query returns the right row")
+
+        // 'denied' is a real, distinguishable value, not nil.
+        let denied = Interval(id: nil, kind: .app, startedAt: 4000, endedAt: 4030,
+                              bundleId: "com.tinyspeck.slackmacgap", appName: "Slack",
+                              contextKind: .denied, context: nil, title: nil,
+                              samples: 1, active: 1, engaged: 0)
+        _ = try store.insert(denied)
+        t.eq(try store.lastInterval()?.contextKind, ContextKind.denied,
+             "denied context kind round-trips and is distinct from nil")
+
+        // update without an id is a programming error, not a silent no-op.
+        do {
+            try store.update(Interval(id: nil, kind: .app, startedAt: 0, endedAt: 0,
+                                      bundleId: nil, appName: nil, contextKind: nil,
+                                      context: nil, title: nil, samples: 0, active: 0, engaged: 0))
+            t.expect(false, "update without id throws")
+        } catch {
+            t.expect(true, "update without id throws")
+        }
+    } catch {
+        t.expect(false, "store tests ran without throwing", "\(error)")
+    }
+
     return t.summary()
 }
 
