@@ -645,6 +645,49 @@ import StalkerMac
         t.expect(false, "courier probe test ran without throwing", "\(error)")
     }
 
+    // --- Task 12: engagement filter ---
+    // Fixture drawn from a real probe run while a video played in Edge, including
+    // the five permanent system assertions that were present at the same time.
+    let assertionTable: [Int32: [AssertionRecord]] = [
+        1958: [AssertionRecord(type: "NoIdleSleepAssertion", name: "Playing audio"),
+               AssertionRecord(type: "NoDisplaySleepAssertion", name: "Video Wake Lock")],
+        419:  [AssertionRecord(type: "UserIsActive", name: "com.apple.iohideventsystem.queue.tickle")],
+        358:  [AssertionRecord(type: "PreventUserIdleSystemSleep", name: "Powerd - Prevent sleep while display is on"),
+               AssertionRecord(type: "InternalPreventDisplaySleep", name: "com.apple.powermanagement.delayDisplayOff")],
+        434:  [AssertionRecord(type: "PreventUserIdleSystemSleep", name: "com.apple.audio.BuiltInSpeakerDevice.context.preventuseridlesleep")],
+        40890: [AssertionRecord(type: "PreventUserIdleSystemSleep", name: "caffeinate command-line tool")],
+    ]
+
+    t.eq(isEngaged(assertionsByPid: assertionTable, pid: 1958), true,
+         "Edge holding a Video Wake Lock counts as engaged")
+    t.eq(isEngaged(assertionsByPid: [1958: [AssertionRecord(type: "NoIdleSleepAssertion", name: "Playing audio")]],
+                   pid: 1958), true,
+         "an audio-only assertion counts as engaged")
+    t.eq(isEngaged(assertionsByPid: [1958: [AssertionRecord(type: "NoDisplaySleepAssertion", name: "Video Wake Lock")]],
+                   pid: 1958), true,
+         "a muted video's display assertion still counts as engaged")
+
+    // The trap found while probing: five system processes hold assertions
+    // permanently. An unscoped check would report engagement 24/7 and idle
+    // detection would never fire at all.
+    t.eq(isEngaged(assertionsByPid: assertionTable, pid: 21090), false,
+         "system assertions held by powerd, coreaudiod, caffeinate must not count for another pid")
+    t.eq(isEngaged(assertionsByPid: assertionTable, pid: 358), false,
+         "powerd's own PreventUserIdleSystemSleep is the wrong type and does not count")
+    t.eq(isEngaged(assertionsByPid: assertionTable, pid: 434), false,
+         "coreaudiod's speaker assertion does not count")
+    t.eq(isEngaged(assertionsByPid: assertionTable, pid: 40890), false,
+         "a caffeinate hold does not count as you watching something")
+    t.eq(isEngaged(assertionsByPid: assertionTable, pid: 419), false,
+         "WindowServer's UserIsActive does not count")
+    t.eq(isEngaged(assertionsByPid: [:], pid: 1958), false, "empty table is not engaged")
+
+    // Live smoke test: the call must succeed and return a Bool rather than crash.
+    let livePid = SystemFocusProbe().frontmost()?.pid ?? 0
+    let liveEngaged = PowerAssertionProbe().isEngaged(pid: livePid)
+    t.expect(liveEngaged == true || liveEngaged == false,
+             "power assertion probe runs against the live system (engaged=\(liveEngaged))")
+
     return t.summary()
 }
 
