@@ -76,6 +76,99 @@ import StalkerCore
     t.eq(normalizeURL("not a url"), nil, "unparseable returns nil")
     t.eq(normalizeURL(""), nil, "empty returns nil")
 
+    // --- Task 4: rules file parsing ---
+    let goodToml = """
+    default = "unclear"
+
+    [[rule]]
+    app = "com.google.Chrome"
+    category = "work"
+
+    [[rule]]
+    app = "com.microsoft.edgemac"
+    category = "fun"
+
+    [[rule]]
+    app_name = "Google Meet"
+    category = "work"
+
+    [[rule]]
+    context = "*/Casey/Work/*"
+    category = "work"
+
+    [[rule]]
+    context = "*/Casey/Projects/*"
+    category = "pet-project"
+    """
+
+    if let rs0 = try? parseRules(goodToml, homeDirectory: "/Users/alex") {
+        t.eq(rs0.defaultCategory, "unclear", "parses default category")
+        t.eq(rs0.rules.count, 5, "parses five rules")
+        t.expect(rs0.rules.contains { $0.app == "com.google.Chrome" && $0.category == "work" },
+                 "parses Chrome rule")
+        t.expect(rs0.rules.contains { $0.appName == "Google Meet" && $0.category == "work" },
+                 "parses PWA rule by app_name")
+        t.expect(rs0.rules.contains { $0.context == "*/Casey/Projects/*" && $0.category == "pet-project" },
+                 "parses context rule")
+    } else {
+        t.expect(false, "good toml parses")
+    }
+
+    // Review Focus 3: a leading ~ must be expanded, else it never matches an absolute cwd.
+    let tildeToml = """
+    default = "unclear"
+
+    [[rule]]
+    context = "~/Work/*"
+    category = "work"
+    """
+    if let rsT = try? parseRules(tildeToml, homeDirectory: "/Users/alex") {
+        t.eq(rsT.rules.first?.context, "/Users/alex/Work/*", "expands leading tilde in context glob")
+        t.expect(globMatches(rsT.rules.first!.context!, "/Users/alex/Work/PM_Assistant"),
+                 "expanded glob matches an absolute path")
+    } else {
+        t.expect(false, "tilde toml parses")
+    }
+
+    // Review Focus 5: malformed input must throw, never silently degrade.
+    func parseThrows(_ str: String, _ name: String) {
+        do {
+            _ = try parseRules(str, homeDirectory: "/Users/alex")
+            t.expect(false, name, "expected a throw but parsing succeeded")
+        } catch {
+            t.expect(true, name)
+        }
+    }
+    parseThrows("default = \"unclear\"\n[[rule]]\napp = \"x\"\n", "rule without category throws")
+    parseThrows("default = \"unclear\"\n[[rule]]\nbogus = \"x\"\ncategory = \"work\"\n", "unknown key throws")
+    parseThrows("default = \"unclear\"\napp = \"x\"\n", "key outside a rule throws")
+    parseThrows("default = \"unclear\"\n[[rule]]\ncategory = \"work\"\n", "rule matching everything throws")
+    parseThrows("default = \"unclear\"\n", "empty rule set throws")
+    parseThrows("this is not toml\n", "garbage throws")
+
+    // Tier assignment.
+    let tierToml = """
+    default = "unclear"
+
+    [[rule]]
+    app = "com.google.Chrome"
+    context = "youtube.com/*"
+    category = "fun"
+
+    [[rule]]
+    context = "*/Work/*"
+    category = "work"
+
+    [[rule]]
+    app = "com.google.Chrome"
+    category = "work"
+    """
+    if let rsTier = try? parseRules(tierToml, homeDirectory: "/Users/alex") {
+        t.eq(rsTier.rules.map(\.tier), [1, 2, 3], "rules are sorted by tier, most specific first")
+    } else {
+        t.expect(false, "tier toml parses")
+    }
+
     return t.summary()
 }
 
