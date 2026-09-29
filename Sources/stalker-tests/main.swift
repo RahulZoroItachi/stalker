@@ -435,6 +435,78 @@ import StalkerCore
         t.expect(false, "courier directory test ran without throwing", "\(error)")
     }
 
+    // --- Task 9: report ---
+    t.eq(bucketStart(1800, bucketSecs: 1800), 1800, "exact boundary is its own bucket")
+    t.eq(bucketStart(1900, bucketSecs: 1800), 1800, "mid-bucket rounds down")
+    t.eq(bucketStart(3599, bucketSecs: 1800), 1800, "last second of a bucket rounds down")
+
+    func mkIv(_ start: Int, _ end: Int, bundle: String?, ctx: String?, kind: Kind = .app) -> Interval {
+        Interval(id: nil, kind: kind, startedAt: start, endedAt: end,
+                 bundleId: bundle, appName: bundle, contextKind: ctx == nil ? nil : .url,
+                 context: ctx, title: nil, samples: 1, active: 1, engaged: 0)
+    }
+
+    t.eq(overlapSeconds(mkIv(0, 600, bundle: "x", ctx: nil), bucketStart: 0, bucketEnd: 1800), 600,
+         "interval fully inside a bucket contributes its whole duration")
+    t.eq(overlapSeconds(mkIv(1500, 2100, bundle: "x", ctx: nil), bucketStart: 0, bucketEnd: 1800), 300,
+         "interval spanning a boundary contributes only its overlap")
+    t.eq(overlapSeconds(mkIv(1500, 2100, bundle: "x", ctx: nil), bucketStart: 1800, bucketEnd: 3600), 300,
+         "the remainder lands in the next bucket")
+    t.eq(overlapSeconds(mkIv(5000, 6000, bundle: "x", ctx: nil), bucketStart: 0, bucketEnd: 1800), 0,
+         "non-overlapping interval contributes nothing")
+
+    // Review Focus 4: a clock correction can leave ended_at before started_at.
+    // A negative duration would corrupt every total it lands in.
+    t.eq(overlapSeconds(mkIv(1000, 400, bundle: "x", ctx: nil), bucketStart: 0, bucketEnd: 1800), 0,
+         "reversed clock yields zero seconds, never a negative duration")
+
+    let rulesToml = """
+    default = "unclear"
+
+    [[rule]]
+    app = "com.google.Chrome"
+    category = "work"
+
+    [[rule]]
+    app = "com.microsoft.edgemac"
+    category = "fun"
+    """
+    let reportRules = try! parseRules(rulesToml, homeDirectory: "/Users/alex")
+
+    let spanning = [mkIv(1500, 2100, bundle: "com.google.Chrome", ctx: "docs.google.com/d")]
+    let slices = slice(spanning, bucketSecs: 1800, rules: reportRules)
+    t.eq(slices.count, 2, "an interval spanning a boundary produces two slices")
+    t.eq(slices.reduce(0) { $0 + $1.seconds }, 600, "slices preserve the total duration")
+    t.expect(slices.allSatisfy { $0.category == "work" }, "both slices carry the same category")
+
+    let mixed = [
+        mkIv(0, 900, bundle: "com.google.Chrome", ctx: "docs.google.com/d"),
+        mkIv(900, 1800, bundle: "com.microsoft.edgemac", ctx: "youtube.com/watch"),
+        mkIv(1800, 2400, bundle: "com.tinyspeck.slackmacgap", ctx: nil),
+    ]
+    let tot = totals(slice(mixed, bucketSecs: 1800, rules: reportRules))
+    t.eq(tot.first { $0.category == "work" }?.seconds, 900, "work total")
+    t.eq(tot.first { $0.category == "fun" }?.seconds, 900, "fun total")
+    t.eq(tot.first { $0.category == "unclear" }?.seconds, 600, "unmatched time totals under unclear")
+    t.expect(tot.first!.seconds >= tot.last!.seconds, "totals are sorted by seconds descending")
+
+    // The per-category context breakdown is what makes habit drift visible:
+    // youtube time sitting inside `work` should be listed, not hidden in a total.
+    let drift = [
+        mkIv(0, 600, bundle: "com.google.Chrome", ctx: "docs.google.com/d"),
+        mkIv(600, 900, bundle: "com.google.Chrome", ctx: "youtube.com/watch"),
+    ]
+    let driftTotals = totals(slice(drift, bucketSecs: 1800, rules: reportRules))
+    t.eq(driftTotals.count, 1, "both intervals classify as work")
+    t.eq(driftTotals.first?.byContext.count, 2, "work breaks down into two contexts")
+    t.eq(driftTotals.first?.byContext.first?.seconds, 600,
+         "context breakdown is sorted by seconds descending")
+
+    let text = render(mixed, bucketSecs: 1800, rules: reportRules, timeZone: TimeZone(identifier: "UTC")!)
+    t.expect(text.contains("work"), "rendered report names categories")
+    t.expect(text.contains("TOTALS"), "rendered report has a totals section")
+    t.expect(text.contains("unclear"), "rendered report surfaces unclear time")
+
     return t.summary()
 }
 
