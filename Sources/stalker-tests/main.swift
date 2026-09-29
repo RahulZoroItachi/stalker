@@ -1,5 +1,6 @@
 import Foundation
 import StalkerCore
+import StalkerMac
 
 @MainActor final class T {
     var failures = 0
@@ -613,6 +614,36 @@ import StalkerCore
     t.eq(secondIdle.context, "docs.google.com/d/1/edit",
          "continuing idle carries the captured context forward")
     t.eq(firstIdle.key, secondIdle.key, "consecutive idle ticks share one interval key")
+
+    // --- Task 11: system probes (smoke tests against the real machine) ---
+    let sysFocus = SystemFocusProbe()
+    if let f = sysFocus.frontmost() {
+        t.expect(f.pid > 0, "focus probe returns a real pid (\(f.appName ?? "?") pid \(f.pid))")
+        t.expect(!(f.appName ?? "").isEmpty, "focus probe returns an app name")
+    } else {
+        t.expect(false, "focus probe returns a frontmost app")
+    }
+
+    let sysIdle = SystemIdleProbe()
+    t.expect(sysIdle.inputIdleSeconds() >= 0, "idle probe returns a non-negative value")
+
+    let sysLock = SystemLockProbe()
+    let locked = sysLock.isScreenLocked()
+    t.eq(locked, false, "screen is not locked while the tests run")
+
+    do {
+        let dir = NSTemporaryDirectory() + "stalker-probe-test-\(Int(Date().timeIntervalSince1970))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let nowSecs = Int(Date().timeIntervalSince1970)
+        try "\(nowSecs) /Users/alex/Desktop/Casey/Work/PM_Assistant"
+            .write(toFile: dir + "/ttys000", atomically: true, encoding: .utf8)
+        let cp = DirectoryCourierProbe(dir: dir)
+        t.eq(cp.newest(now: nowSecs)?.cwd, "/Users/alex/Desktop/Casey/Work/PM_Assistant",
+             "courier probe reads the newest file")
+        try FileManager.default.removeItem(atPath: dir)
+    } catch {
+        t.expect(false, "courier probe test ran without throwing", "\(error)")
+    }
 
     return t.summary()
 }
