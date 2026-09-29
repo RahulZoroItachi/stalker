@@ -750,6 +750,49 @@ import StalkerMac
              "a nil date spans the day containing now")
     t.eq(today.from % 86_400, 0, "UTC day starts on a day boundary")
 
+    // --- Task 15: install artefacts ---
+    let repo = FileManager.default.currentDirectoryPath
+    let fm2 = FileManager.default
+    t.expect(fm2.fileExists(atPath: repo + "/scripts/stalker.zsh"), "shell hook exists")
+    t.expect(fm2.fileExists(atPath: repo + "/scripts/stalker.sample.plist"), "launchd plist exists")
+    t.expect(fm2.fileExists(atPath: repo + "/scripts/install.sh"), "installer exists")
+    t.expect(fm2.fileExists(atPath: repo + "/scripts/rules.toml.default"), "default rules exist")
+
+    // The hook must use only zsh builtins. A subprocess costs ~5 ms per command
+    // instead of ~0.06 ms, which is felt at the prompt.
+    if let hook = try? String(contentsOfFile: repo + "/scripts/stalker.zsh", encoding: .utf8) {
+        // Assert on code, not prose: the hook's comments legitimately mention the
+        // slower sqlite3 alternative and its measured cost.
+        let hookCode = hook
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.hasPrefix("#") }
+            .joined(separator: "\n")
+
+        t.expect(hook.contains("zmodload zsh/datetime"),
+                 "hook loads zsh/datetime for builtin EPOCHSECONDS")
+        t.expect(hookCode.contains("$EPOCHSECONDS"), "hook uses builtin EPOCHSECONDS")
+        t.expect(!hookCode.contains("$(date"), "hook does not spawn date")
+        t.expect(!hookCode.contains("sqlite3"), "hook does not touch the database")
+        t.expect(hookCode.contains("add-zsh-hook preexec"), "hook registers preexec")
+        t.expect(hookCode.contains("add-zsh-hook chpwd"), "hook registers chpwd")
+    } else {
+        t.expect(false, "shell hook is readable")
+    }
+
+    // The default rules must parse with the very parser that will read them.
+    if let defaults = try? String(contentsOfFile: repo + "/scripts/rules.toml.default", encoding: .utf8) {
+        do {
+            let rsD = try parseRules(defaults, homeDirectory: "/Users/alex")
+            t.expect(rsD.rules.count >= 4, "default rules contain at least four rules")
+            t.eq(rsD.defaultCategory, "unclear", "default category is unclear")
+        } catch {
+            t.expect(false, "default rules parse", "\(error)")
+        }
+    } else {
+        t.expect(false, "default rules are readable")
+    }
+
     return t.summary()
 }
 

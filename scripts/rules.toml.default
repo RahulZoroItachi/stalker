@@ -1,0 +1,46 @@
+# stalker classification rules.
+#
+# Categories are applied when a report is generated, never when data is
+# collected — so any rule you add here re-classifies your whole history.
+#
+# Precedence is by specificity, not file order:
+#   tier 1  app (or app_name) AND context
+#   tier 2  context only
+#   tier 3  app (or app_name) only
+
+default = "unclear"
+
+[[rule]]
+app = "com.google.Chrome"
+category = "work"
+
+[[rule]]
+app = "com.microsoft.edgemac"
+category = "fun"
+
+# PWA bundle ids are opaque, install-specific hashes, so match these by name.
+[[rule]]
+app_name = "Google Meet"
+category = "work"
+
+[[rule]]
+app_name = "Gmail"
+category = "work"
+
+[[rule]]
+app_name = "Google Calendar"
+category = "work"
+
+[[rule]]
+app = "com.tinyspeck.slackmacgap"
+category = "work"
+
+# Path rules are app-independent: they cover terminal directories, Finder
+# folders, and open documents with the same pattern.
+[[rule]]
+context = "*/Casey/Work/*"
+category = "work"
+
+[[rule]]
+context = "*/Casey/Projects/*"
+category = "pet-project"
