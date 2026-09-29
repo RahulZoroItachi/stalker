@@ -842,6 +842,48 @@ import StalkerMac
                                                       appName: "Notes", pid: 1))
     t.eq(notesResult, ContextResult.none, "composite returns none for a non-browser")
 
+    // --- Final review fixes ---
+    // IMPORTANT 1: an interval must account for the time its ticks represent.
+    // endedAt = last tick meant n samples spanned (n-1)*period, and a single-sample
+    // interval spanned zero seconds and vanished from the report entirely.
+    do {
+        let store = try Store(path: ":memory:")
+        try store.migrate()
+        let r = Reconciler(store: store, samplePeriod: 30)
+        try r.ingest(mkSample(at: 1000, bundle: "com.google.Chrome", ctx: "a.com/x"))
+        try r.ingest(mkSample(at: 1030, bundle: "com.apple.Notes", ctx: nil))
+        let rows = try store.intervals(from: 0, to: 99999)
+        if let first = rows.first(where: { $0.bundleId == "com.google.Chrome" }) {
+            t.eq(first.endedAt, 1030,
+                 "a closed interval extends to the moment the change was observed")
+            t.expect(first.endedAt > first.startedAt,
+                     "a single-sample interval has non-zero duration")
+            t.eq(overlapSeconds(first, bucketStart: 0, bucketEnd: 99999), 30,
+                 "a single-sample interval contributes one period of time")
+        } else {
+            t.expect(false, "closed interval was persisted")
+        }
+    } catch {
+        t.expect(false, "interval duration test ran without throwing", "\(error)")
+    }
+
+    // IMPORTANT 2: a dev server URL has no dot in its host and must still be kept.
+    t.eq(normalizeURL("http://localhost:3000/app"), "localhost/app",
+         "a localhost dev URL is kept, not dropped")
+    t.eq(normalizeURL("http://127.0.0.1:8080/x"), "127.0.0.1/x", "a loopback IP is kept")
+    t.eq(normalizeURL("http://localhost"), "localhost/", "bare localhost gains a trailing slash")
+    t.eq(normalizeURL("not a url"), nil, "a scheme-less phrase is still rejected")
+    t.eq(normalizeURL("notaurl"), nil, "a scheme-less dotless word is still rejected")
+
+    // IMPORTANT 3: stderr must not be left on an unread pipe.
+    t.expect(BrowserAppleScriptProbe.runOsascript("return 1", hardTimeout: 3) == "1",
+             "osascript round-trip works")
+    t.eq(BrowserAppleScriptProbe.runOsascript(
+            "repeat with i from 1 to 4000\nlog \"noise padding to fill a pipe buffer\"\nend repeat\nreturn \"done\"",
+            hardTimeout: 5),
+         "done",
+         "a script writing far more than a pipe buffer to stderr still completes")
+
     return t.summary()
 }
 

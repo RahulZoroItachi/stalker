@@ -23,8 +23,12 @@ public func normalizeURL(_ raw: String) -> String? {
     if let h = s.firstIndex(of: "#") { s = String(s[s.startIndex..<h]) }
     if let q = s.firstIndex(of: "?") { s = String(s[s.startIndex..<q]) }
 
-    // Drop scheme.
-    if let r = s.range(of: "://") { s = String(s[r.upperBound...]) }
+    // Drop scheme, remembering that we saw one.
+    var hadScheme = false
+    if let r = s.range(of: "://") {
+        s = String(s[r.upperBound...])
+        hadScheme = true
+    }
 
     // Split host from path at the first "/".
     var host = s
@@ -38,8 +42,11 @@ public func normalizeURL(_ raw: String) -> String? {
     if let at = host.lastIndex(of: "@") { host = String(host[host.index(after: at)...]) }
     if let colon = host.firstIndex(of: ":") { host = String(host[host.startIndex..<colon]) }
 
-    // A host must look like a host: no spaces, and at least one dot.
-    guard !host.isEmpty, !host.contains(" "), host.contains(".") else { return nil }
+    // A host must look like a host: no spaces, and either a dot or an explicit
+    // scheme. The scheme clause is what keeps `http://localhost:3000/app` — a dev
+    // server has no dot in its host, and requiring one silently discarded every
+    // local URL. A scheme-less, dotless word is still rejected.
+    guard !host.isEmpty, !host.contains(" "), hadScheme || host.contains(".") else { return nil }
 
     return path.isEmpty ? host + "/" : host + path
 }

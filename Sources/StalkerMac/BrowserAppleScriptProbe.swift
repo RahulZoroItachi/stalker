@@ -48,13 +48,16 @@ public struct BrowserAppleScriptProbe: Sendable {
 
     /// `with timeout` only bounds Apple Event waits, so the process is also killed
     /// outright as a backstop.
-    static func runOsascript(_ script: String, hardTimeout: Int) -> String? {
+    public static func runOsascript(_ script: String, hardTimeout: Int) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         p.arguments = ["-e", script]
-        let out = Pipe(), err = Pipe()
+        let out = Pipe()
         p.standardOutput = out
-        p.standardError = err
+        // stderr goes to /dev/null, never to a pipe. A pipe nobody reads blocks the
+        // child once its buffer fills, which is exactly the indefinite hang the
+        // timeouts above exist to prevent. We never use osascript's stderr.
+        p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
 
         let deadline = Date().addingTimeInterval(TimeInterval(hardTimeout))

@@ -65,7 +65,12 @@ public final class Reconciler {
 
         case .closeAndOpen:
             if var iv = open {
-                iv.endedAt = max(iv.endedAt, iv.startedAt)
+                // Extend to the moment the change was observed, not the last tick that
+                // matched. endedAt = last tick would make an interval of n samples span
+                // only (n-1) periods, and a single-sample interval span zero seconds —
+                // which slice() then drops entirely. Every app switch would silently
+                // lose up to one period of the day.
+                iv.endedAt = max(iv.endedAt, s.at)
                 try store.update(iv)
             }
             try insertNew(s)
