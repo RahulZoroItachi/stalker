@@ -822,11 +822,10 @@ import StalkerMac
     let chromeRunning = NSWorkspace.shared.runningApplications
         .contains { $0.bundleIdentifier == "com.google.Chrome" }
     let liveURL = asProbe.url(bundleId: "com.google.Chrome")
-    if chromeRunning {
-        t.expect(liveURL != nil, "AppleScript returns a URL for a running Chrome (\(liveURL ?? "nil"))")
-    } else {
-        t.eq(liveURL, nil, "AppleScript returns nil when Chrome is not running")
-    }
+    // Smoke only: whether Chrome has a front window, and what is in it, is live
+    // state this suite must not depend on. Correctness lives in the unit tests.
+    t.expect(liveURL == nil || !(liveURL!.isEmpty),
+             "AppleScript probe returns nil or a non-empty value (running=\(chromeRunning), got \(liveURL ?? "nil"))")
 
     // An unknown application must not hang or crash the tick.
     t.eq(asProbe.url(bundleId: "com.example.NotAnApp"), nil,
@@ -921,6 +920,29 @@ import StalkerMac
     t.eq(watchingActive.kind, Kind.app, "active tick with media playing stays kind app")
     t.eq(watchingActive.engaged, true, "media playing is recorded even with recent input")
     t.eq(watchingActive.hadInput, true, "recent input is still recorded alongside it")
+
+    // GAP 7: a browser showing a local file reports a file:// URL, whose host is
+    // empty — so the web-URL guard discarded it and every local PDF, download or
+    // HTML file recorded no context at all. The path is also exactly what the
+    // path rules need to match.
+    t.eq(normalizeURL("file:///Users/alex/Downloads/report.pdf"),
+         "/Users/alex/Downloads/report.pdf", "a file URL becomes a plain path")
+    t.eq(normalizeURL("file:///Users/alex/Downloads/FY27%20Cash%20Plan.pdf"),
+         "/Users/alex/Downloads/FY27 Cash Plan.pdf", "percent-encoding is decoded")
+    t.eq(normalizeURL("file://localhost/Users/alex/x.pdf"), "/Users/alex/x.pdf",
+         "a localhost authority is dropped from a file URL")
+    t.eq(normalizeURL("file://"), nil, "an empty file URL is still rejected")
+    t.eq(isFileURL("file:///x"), true, "isFileURL detects a file URL")
+    t.eq(isFileURL("https://example.com/x"), false, "isFileURL rejects a web URL")
+
+    // The kind must say file, not url, and a work path must still classify.
+    t.eq(classifyContextValue(axURL: "file:///Users/alex/Desktop/Casey/Work/spec.pdf",
+                              axDocument: nil, axTitle: "spec.pdf"),
+         ContextResult.value(.file, "/Users/alex/Desktop/Casey/Work/spec.pdf", title: "spec.pdf"),
+         "a browser-hosted local file is context kind file, not url")
+    t.eq(classify(mkInterval(bundle: "com.google.Chrome", name: "Google Chrome",
+                             ctx: "/Users/alex/Desktop/Casey/Work/spec.pdf"), with: rs),
+         "work", "a work-directory PDF open in a browser classifies as work")
 
     return t.summary()
 }

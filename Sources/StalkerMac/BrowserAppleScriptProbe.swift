@@ -99,6 +99,8 @@ public struct FallbackContextProbe: ContextProbe {
         // Keep whatever title the primary found; only the URL is being replaced.
         var title: String?
         if case .value(_, _, let t) = first { title = t }
-        return .value(.url, url, title: title)
+        // normalizeURL returns either `host/...` or, for a file URL, an absolute
+        // path — which is the only case that can start with a slash.
+        return .value(url.hasPrefix("/") ? .file : .url, url, title: title)
     }
 }

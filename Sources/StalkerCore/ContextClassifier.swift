@@ -9,7 +9,9 @@ public func classifyContextValue(axURL: String?, axDocument: String?, axTitle: S
     let title = (axTitle?.isEmpty ?? true) ? nil : axTitle
 
     if let raw = axURL, let normalized = normalizeURL(raw) {
-        return .value(.url, normalized, title: title)
+        // A local file open in a browser is a file, not a web page — and saying so
+        // keeps `url` honest about what it contains.
+        return .value(isFileURL(raw) ? .file : .url, normalized, title: title)
     }
 
     if let doc = axDocument, !doc.isEmpty {

@@ -1,5 +1,10 @@
 import Foundation
 
+/// Does this look like a local-file URL rather than a web one?
+public func isFileURL(_ raw: String) -> Bool {
+    raw.lowercased().hasPrefix("file://")
+}
+
 /// Shell-style glob match using libc `fnmatch(3)`. No custom matcher, no dependency.
 public func globMatches(_ pattern: String, _ subject: String) -> Bool {
     fnmatch(pattern, subject, 0) == 0
@@ -16,6 +21,21 @@ public func globMatches(_ pattern: String, _ subject: String) -> Bool {
 public func normalizeURL(_ raw: String) -> String? {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
+
+    // A browser showing a local file reports `file:///path`, whose host is empty.
+    // Running it through the web-URL path discarded it on the empty-host guard,
+    // so every local PDF, download and HTML file recorded no context at all.
+    // Return the plain decoded path instead — which is also exactly what the
+    // path rules match against.
+    if isFileURL(trimmed) {
+        var rest = String(trimmed.dropFirst("file://".count))
+        // file://localhost/path is equivalent to file:///path.
+        if rest.lowercased().hasPrefix("localhost/") {
+            rest = String(rest.dropFirst("localhost".count))
+        }
+        let path = rest.removingPercentEncoding ?? rest
+        return path.isEmpty ? nil : path
+    }
 
     // Drop fragment then query. Doing it textually avoids URLComponents' tolerance
     // for inputs that are not really URLs.
