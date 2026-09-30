@@ -35,6 +35,30 @@ category = "work"
 app = "com.tinyspeck.slackmacgap"
 category = "work"
 
+# URL rules are tier 2, so they beat the tier-3 app rules above regardless of
+# order. Without these, a YouTube video in Chrome is filed as work purely
+# because Chrome is. These need Accessibility granted — without it no URL is
+# collected and only the app rules above can fire.
+[[rule]]
+context = "*youtube.com/*"
+category = "fun"
+
+[[rule]]
+context = "*netflix.com/*"
+category = "fun"
+
+[[rule]]
+context = "*reddit.com/*"
+category = "fun"
+
+[[rule]]
+context = "*x.com/*"
+category = "fun"
+
+[[rule]]
+context = "*news.ycombinator.com/*"
+category = "fun"
+
 # Path rules are app-independent: they cover terminal directories, Finder
 # folders, and open documents with the same pattern.
 [[rule]]

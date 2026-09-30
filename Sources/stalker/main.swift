@@ -68,7 +68,8 @@ func runReport(date: String?) -> Int32 {
             print("no data for that day")
             return 0
         }
-        print(render(ivs, bucketSecs: bucketSeconds, rules: rules, timeZone: tz))
+        print(render(ivs, bucketSecs: bucketSeconds, rules: rules, timeZone: tz,
+                     from: range.from, to: range.to))
         return 0
     } catch {
         FileHandle.standardError.write("report failed: \(error)\n".data(using: .utf8)!)

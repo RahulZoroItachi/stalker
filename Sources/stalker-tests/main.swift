@@ -564,7 +564,7 @@ import StalkerMac
                                            ctx: .value(.url, "docs.google.com/d/1/edit", title: "Doc")))
     t.eq(typing.kind, Kind.app, "active use yields kind app")
     t.eq(typing.hadInput, true, "input within the sample period counts as input")
-    t.eq(typing.engaged, false, "engagement is not checked while actively typing")
+    t.eq(typing.engaged, false, "engagement records false when nothing is playing")
     t.eq(typing.context, "docs.google.com/d/1/edit", "context is captured while active")
     t.eq(typing.contextKind, ContextKind.url, "context kind is url for a browser")
 
@@ -883,6 +883,44 @@ import StalkerMac
             hardTimeout: 5),
          "done",
          "a script writing far more than a pipe buffer to stderr still completes")
+
+    // --- Gap fixes before first real use ---
+    // GAP 1: a report for one day must not count time that fell outside it.
+    let crossMidnight = [mkIv(86_400 - 1200, 86_400 + 1200,
+                              bundle: "com.google.Chrome", ctx: "docs.google.com/d")]
+    let clamped = slice(crossMidnight, bucketSecs: 1800, rules: reportRules,
+                        from: 86_400, to: 86_400 * 2)
+    t.eq(clamped.reduce(0) { $0 + $1.seconds }, 1200,
+         "slices are clamped to the requested range, not the interval's full span")
+    t.expect(clamped.allSatisfy { $0.bucketStart >= 86_400 },
+             "no bucket falls before the requested day")
+    let unclamped = slice(crossMidnight, bucketSecs: 1800, rules: reportRules)
+    t.eq(unclamped.reduce(0) { $0 + $1.seconds }, 2400,
+         "with no range given the whole interval is still counted")
+
+    // GAP 5: the shipped defaults must not file YouTube in Chrome as work.
+    if let defaultsText = try? String(contentsOfFile: repo + "/scripts/rules.toml.default",
+                                     encoding: .utf8),
+       let rsDef = try? parseRules(defaultsText, homeDirectory: "/Users/alex") {
+        t.eq(classify(mkInterval(bundle: "com.google.Chrome", name: "Google Chrome",
+                                 ctx: "www.youtube.com/watch"), with: rsDef),
+             "fun", "default rules file YouTube in Chrome as fun, not work")
+        t.eq(classify(mkInterval(bundle: "com.google.Chrome", name: "Google Chrome",
+                                 ctx: "docs.google.com/document/d/1/edit"), with: rsDef),
+             "work", "default rules still file a Google Doc in Chrome as work")
+    } else {
+        t.expect(false, "default rules parse for the YouTube check")
+    }
+
+    // GAP 6: media playing is recorded even while the app is actively in use.
+    // The check was gated behind the idle threshold to save cost; measured at
+    // 0.117 ms per call, that gate bought nothing and hid passive watching.
+    let watchingActive = makeSample(now: 1000, previous: nil, config: cfg,
+                                    probes: probes(edge, idle: 5, engaged: true,
+                                                   ctx: .value(.url, "www.youtube.com/watch", title: nil)))
+    t.eq(watchingActive.kind, Kind.app, "active tick with media playing stays kind app")
+    t.eq(watchingActive.engaged, true, "media playing is recorded even with recent input")
+    t.eq(watchingActive.hadInput, true, "recent input is still recorded alongside it")
 
     return t.summary()
 }

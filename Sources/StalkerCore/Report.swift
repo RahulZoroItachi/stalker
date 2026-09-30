@@ -32,15 +32,26 @@ public struct Slice: Equatable, Sendable {
 }
 
 /// Cut intervals at bucket boundaries, classifying each as it goes.
-public func slice(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet) -> [Slice] {
+///
+/// `from`/`to` clamp each interval to the window being reported. Without the
+/// clamp an interval spanning midnight contributed its ENTIRE duration to
+/// whichever day was asked for, and emitted buckets labelled with the
+/// neighbouring day's times — so every daily total was wrong by however long
+/// the machine was mid-interval at midnight. Passing nil keeps the whole span,
+/// which is what the unclamped callers want.
+public func slice(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet,
+                  from: Int? = nil, to: Int? = nil) -> [Slice] {
+    let lo = from ?? Int.min
+    let hi = to ?? Int.max
     var out: [Slice] = []
     for iv in ivs {
-        let ivEnd = max(iv.endedAt, iv.startedAt)
-        guard ivEnd > iv.startedAt else { continue }
+        let start = max(iv.startedAt, lo)
+        let end = min(max(iv.endedAt, iv.startedAt), hi)
+        guard end > start else { continue }
         let category = iv.kind == .app ? classify(iv, with: rules) : iv.kind.rawValue
-        var b = bucketStart(iv.startedAt, bucketSecs: bucketSecs)
-        while b < ivEnd {
-            let secs = overlapSeconds(iv, bucketStart: b, bucketEnd: b + bucketSecs)
+        var b = bucketStart(start, bucketSecs: bucketSecs)
+        while b < end {
+            let secs = max(0, min(end, b + bucketSecs) - max(start, b))
             if secs > 0 {
                 out.append(Slice(bucketStart: b, category: category, kind: iv.kind,
                                  appName: iv.appName, context: iv.context, seconds: secs))
@@ -99,8 +110,9 @@ private func dur(_ secs: Int) -> String {
     return h > 0 ? "\(h)h \(String(format: "%02d", m))m" : "\(m)m"
 }
 
-public func render(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZone: TimeZone) -> String {
-    let all = slice(ivs, bucketSecs: bucketSecs, rules: rules)
+public func render(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZone: TimeZone,
+                   from: Int? = nil, to: Int? = nil) -> String {
+    let all = slice(ivs, bucketSecs: bucketSecs, rules: rules, from: from, to: to)
     var lines: [String] = []
 
     // Per bucket, the category that took the most time, with its top context.

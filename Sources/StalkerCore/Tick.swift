@@ -19,12 +19,15 @@ public func makeSample(now: Int, previous: Sample?, config: TickConfig, probes: 
     let inputIdleSecs = probes.idle.inputIdleSeconds()
     let hadInput = inputIdleSecs < Double(config.samplePeriod)
 
-    // The engagement check is a tiebreaker, reached only once the no-input
-    // threshold trips — so it costs nothing while you are typing. Spec §5.4.
-    var engaged = false
+    // Engagement is measured on every tick, not only past the idle threshold.
+    // Gating it was meant to save cost, but the lookup measures 0.117 ms — about
+    // 337 ms across a whole day — and the gate meant `engaged` read 0 whenever
+    // you moved the cursor while a video played, making passive watching
+    // indistinguishable from working. It still only decides idle-vs-app past the
+    // threshold; below it the tick is active either way. Spec §5.4.
+    let engaged = probes.engagement.isEngaged(pid: focus.pid)
     var kind = Kind.app
     if inputIdleSecs > Double(config.idleThreshold) {
-        engaged = probes.engagement.isEngaged(pid: focus.pid)
         kind = engaged ? .app : .idle
     }
 
