@@ -22,7 +22,8 @@ public protocol IdleProbe: Sendable { func inputIdleSeconds() -> Double }
 public protocol LockProbe: Sendable { func isScreenLocked() -> Bool }
 public protocol EngagementProbe: Sendable { func isEngaged(pid: Int32) -> Bool }
 public protocol ContextProbe: Sendable { func context(for focus: FocusInfo) -> ContextResult }
-public protocol CourierProbe: Sendable { func newest(now: Int) -> CourierReading? }
+public protocol FolderProbe: Sendable { func folder() -> String? }
+public protocol CourierProbe: Sendable { func newest(now: Int, bundleId: String) -> CourierReading? }
 
 public struct Probes: Sendable {
     public let focus: any FocusProbe

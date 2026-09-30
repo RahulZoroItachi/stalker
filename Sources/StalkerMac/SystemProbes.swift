@@ -40,13 +40,18 @@ public struct SystemLockProbe: LockProbe {
 }
 
 /// Reads the courier directory the zsh hook writes into.
+///
+/// Readings are nested one subdirectory per hosting app (`dir/<bundle-id>/<tty>`),
+/// so a stale-but-present reading from one terminal app can never outrank a
+/// fresher reading from a different terminal app just because it happens to be
+/// newer. Only readings written by the app actually asked about are candidates.
 public struct DirectoryCourierProbe: CourierProbe {
     let dir: String
     let maxAgeSecs: Int
     public init(dir: String, maxAgeSecs: Int = courierMaxAgeSecs) {
         self.dir = dir; self.maxAgeSecs = maxAgeSecs
     }
-    public func newest(now: Int) -> CourierReading? {
-        readCourierDir(dir, now: now, maxAgeSecs: maxAgeSecs)
+    public func newest(now: Int, bundleId: String) -> CourierReading? {
+        readCourierDir(dir + "/" + bundleId, now: now, maxAgeSecs: maxAgeSecs)
     }
 }

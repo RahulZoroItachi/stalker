@@ -510,6 +510,23 @@ import StalkerMac
     t.expect(text.contains("TOTALS"), "rendered report has a totals section")
     t.expect(text.contains("unclear"), "rendered report surfaces unclear time")
 
+    // The timeline row must pick the category with the most TOTAL time in the
+    // bucket, not whichever single continuous fragment happens to be longest.
+    // Two unclear visits (400s + 300s = 700s) outweigh one fun visit (500s),
+    // even though that one fun fragment is longer than either unclear fragment alone.
+    let dominance = [
+        mkIv(0, 400, bundle: "com.tinyspeck.slackmacgap", ctx: nil),
+        mkIv(400, 900, bundle: "com.microsoft.edgemac", ctx: nil),
+        mkIv(900, 1200, bundle: "com.tinyspeck.slackmacgap", ctx: nil),
+    ]
+    let dominanceText = render(dominance, bucketSecs: 1800, rules: reportRules,
+                               timeZone: TimeZone(identifier: "UTC")!)
+    let timelineRow = dominanceText.components(separatedBy: "\n").first ?? ""
+    t.expect(timelineRow.contains("unclear"),
+             "the category with more total time (unclear, 700s) wins the row, got: \(timelineRow)")
+    t.expect(!timelineRow.contains("fun"),
+             "a single longer fragment (fun, 500s) must not beat a category with more total time")
+
     // --- Task 10: the tick ---
     struct FakeFocus: FocusProbe {
         let info: FocusInfo?
@@ -533,7 +550,7 @@ import StalkerMac
     }
     struct FakeCourier: CourierProbe {
         let reading: CourierReading?
-        func newest(now: Int) -> CourierReading? { reading }
+        func newest(now: Int, bundleId: String) -> CourierReading? { reading }
     }
 
     let cfg = TickConfig(samplePeriod: 30, idleThreshold: 180,
@@ -635,13 +652,28 @@ import StalkerMac
 
     do {
         let dir = NSTemporaryDirectory() + "stalker-probe-test-\(Int(Date().timeIntervalSince1970))"
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let nowSecs = Int(Date().timeIntervalSince1970)
+        let ghosttyDir = dir + "/com.mitchellh.ghostty"
+        let itermDir = dir + "/com.googlecode.iterm2"
+        try FileManager.default.createDirectory(atPath: ghosttyDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: itermDir, withIntermediateDirectories: true)
         try "\(nowSecs) /Users/alex/Desktop/Casey/Work/PM_Assistant"
-            .write(toFile: dir + "/ttys000", atomically: true, encoding: .utf8)
+            .write(toFile: ghosttyDir + "/ttys000", atomically: true, encoding: .utf8)
+        // Deliberately newer than the ghostty reading, to prove cross-app recency
+        // never wins: only readings under the app actually asked for are
+        // candidates, no matter how much staler they are than another app's.
+        try "\(nowSecs + 60) /Users/alex/Desktop/Casey/Projects/stalker"
+            .write(toFile: itermDir + "/ttys999", atomically: true, encoding: .utf8)
+
         let cp = DirectoryCourierProbe(dir: dir)
-        t.eq(cp.newest(now: nowSecs)?.cwd, "/Users/alex/Desktop/Casey/Work/PM_Assistant",
-             "courier probe reads the newest file")
+        t.eq(cp.newest(now: nowSecs, bundleId: "com.mitchellh.ghostty")?.cwd,
+             "/Users/alex/Desktop/Casey/Work/PM_Assistant",
+             "courier probe reads the newest file scoped to the requested app")
+        t.eq(cp.newest(now: nowSecs, bundleId: "com.googlecode.iterm2")?.cwd,
+             "/Users/alex/Desktop/Casey/Projects/stalker",
+             "a different app's reading is scoped independently, even though it is newer")
+        t.eq(cp.newest(now: nowSecs, bundleId: "com.apple.Terminal"), nil,
+             "an app with no courier subdirectory yet returns nil, never another app's reading")
         try FileManager.default.removeItem(atPath: dir)
     } catch {
         t.expect(false, "courier probe test ran without throwing", "\(error)")
@@ -711,6 +743,10 @@ import StalkerMac
     t.eq(classifyContextValue(axURL: "not a url", axDocument: nil, axTitle: "Some Window"),
          ContextResult.value(.title, "Some Window", title: "Some Window"),
          "an unparseable URL falls through to the title rather than storing garbage")
+    t.eq(classifyContextValue(axURL: nil, axDocument: "https://new-relic.atlassian.net/browse/NR-547597",
+                              axTitle: "NR-547597"),
+         ContextResult.value(.url, "new-relic.atlassian.net/browse/NR-547597", title: "NR-547597"),
+         "a web URL surfaced via AXDocument (Chrome) classifies as url, not file")
 
     // Live probe. Accessibility is expected NOT to be granted before install
     // step 7, so this must report denied rather than crash or hang.
@@ -808,10 +844,39 @@ import StalkerMac
                         bundleId: "com.google.Chrome", browserBundleIds: browsers),
          true, "a browser yielding only a title still falls back to get the URL")
 
-    // Deliberate: a denied grant must NOT be papered over by the fallback.
-    // Recording `denied` is the only way a revoked permission stays visible.
+    // A denied grant DOES fall back. The earlier rule refused to, so a revoked
+    // Accessibility grant meant no browser URL was collected at all — for weeks,
+    // while Automation sat granted and able to answer every request. `denied` is
+    // still what gets recorded when AppleScript cannot answer either, so the
+    // column keeps firing and now means "no source could supply a URL".
     t.eq(shouldFallBack(primary: .denied, bundleId: "com.google.Chrome", browserBundleIds: browsers),
-         false, "denied is reported, never silently replaced by the fallback")
+         true, "a denied grant falls back to AppleScript rather than losing the URL")
+    t.eq(shouldFallBack(primary: .denied, bundleId: "com.apple.Notes", browserBundleIds: browsers),
+         false, "a denied non-browser still records denied, since nothing else can answer")
+    t.eq(shouldFallBack(primary: .value(.url, "a.com/x", title: nil),
+                        bundleId: "com.microsoft.edgemac", browserBundleIds: browsers),
+         false, "a URL Accessibility already found is not re-fetched over AppleScript")
+
+    // The composition: denied primary plus a working fallback yields the URL, and
+    // denied survives only when the fallback cannot answer either.
+    struct DeniedOnly: ContextProbe {
+        func context(for focus: FocusInfo) -> ContextResult { .denied }
+    }
+    let edgeFocus = FocusInfo(bundleId: "com.microsoft.edgemac", appName: "Microsoft Edge", pid: 7)
+    let deniedComposite = FallbackContextProbe(primary: DeniedOnly(),
+                                               fallback: BrowserAppleScriptProbe(),
+                                               browserBundleIds: browsers)
+    let edgeResult = deniedComposite.context(for: edgeFocus)
+    // Live: Edge may or may not be running with a front window. Either a URL or a
+    // preserved `denied` is correct; anything else is not.
+    switch edgeResult {
+    case .denied:
+        t.expect(true, "denied is preserved when AppleScript cannot answer either")
+    case .value(let k, let v, _):
+        t.expect(k == .url || k == .file, "fallback produced a URL for a denied browser (got \(v))")
+    case .none:
+        t.expect(false, "a denied browser must never degrade to no context at all")
+    }
 
     t.eq(shouldFallBack(primary: .none, bundleId: nil, browserBundleIds: browsers),
          false, "a nil bundle id cannot be a known browser")
@@ -943,6 +1008,206 @@ import StalkerMac
     t.eq(classify(mkInterval(bundle: "com.google.Chrome", name: "Google Chrome",
                              ctx: "/Users/alex/Desktop/Casey/Work/spec.pdf"), with: rs),
          "work", "a work-directory PDF open in a browser classifies as work")
+
+    // --- Finder folder probe ---
+    // Finder is the one app Accessibility cannot describe: no AXURL, no document,
+    // so the AX chain yields the window title — the bare folder name, which no
+    // path rule can match. AppleScript supplies the POSIX path instead.
+    t.eq(normalizeFolderPath("/Users/alex/Desktop/Casey/Projects/"),
+         "/Users/alex/Desktop/Casey/Projects",
+         "Finder's trailing slash is stripped so a folder matches a cwd spelling")
+    t.eq(normalizeFolderPath("/Users/alex/Desktop/Casey/Projects"),
+         "/Users/alex/Desktop/Casey/Projects", "a path with no trailing slash is unchanged")
+    t.eq(normalizeFolderPath("/Users/alex///"), "/Users/alex", "repeated trailing slashes are stripped")
+    t.eq(normalizeFolderPath("/"), "/", "the root path survives stripping")
+    t.eq(normalizeFolderPath("  /Users/alex/  "), "/Users/alex", "surrounding whitespace is trimmed")
+    t.eq(normalizeFolderPath(""), nil, "an empty answer is not a path")
+    t.eq(normalizeFolderPath("Projects"), nil, "a bare folder name is rejected, not accepted as a path")
+
+    t.eq(shouldUseFolderProbe(bundleId: "com.apple.finder"), true, "Finder uses the folder probe")
+    t.eq(shouldUseFolderProbe(bundleId: "com.google.Chrome"), false, "a browser does not")
+    t.eq(shouldUseFolderProbe(bundleId: nil), false, "a nil bundle id does not")
+
+    // The composition: Finder is served by the folder probe, everything else by
+    // the ordinary chain, and a Finder window with no folder degrades to it too.
+    struct FakeFolder: FolderProbe {
+        let path: String?
+        func folder() -> String? { path }
+    }
+    struct DeniedProbe: ContextProbe {
+        func context(for focus: FocusInfo) -> ContextResult { .denied }
+    }
+    let finderFocus = FocusInfo(bundleId: "com.apple.finder", appName: "Finder", pid: 9)
+    let otherFocus = FocusInfo(bundleId: "com.apple.Notes", appName: "Notes", pid: 10)
+
+    let withFolder = FinderContextProbe(primary: DeniedProbe(),
+                                        folder: FakeFolder(path: "/Users/alex/Desktop/Casey/Work"))
+    t.eq(withFolder.context(for: finderFocus),
+         ContextResult.value(.folder, "/Users/alex/Desktop/Casey/Work", title: nil),
+         "Finder yields a folder context from the folder probe")
+    t.eq(withFolder.context(for: otherFocus), ContextResult.denied,
+         "a non-Finder app is passed straight through to the ordinary chain")
+
+    // Deliberate: the folder probe runs even when Accessibility is denied, because
+    // a granted AX reading for Finder carries no more information than a denied
+    // one. That is the opposite of the browser fallback, which must never paper
+    // over `denied`.
+    let noFolder = FinderContextProbe(primary: DeniedProbe(), folder: FakeFolder(path: nil))
+    t.eq(noFolder.context(for: finderFocus), ContextResult.denied,
+         "Finder with no folder behind the window reports what the chain said")
+
+    // The script must bound its own Apple Event wait and must not raise on a
+    // window that has no folder, or a Trash window would kill the tick.
+    let finderScript = FinderFolderProbe.script(timeoutSeconds: 2)
+    t.expect(finderScript.contains("with timeout of 2 seconds"), "Finder script bounds its Apple Event wait")
+    t.expect(finderScript.contains("on error"), "Finder script swallows errors rather than raising")
+    t.expect(finderScript.contains("count of Finder windows"),
+             "Finder script handles having no folder window open")
+    // Regression: `front window` picked up Get Info panels and the Go to Folder
+    // sheet, whose `target` raises -1700 — so a real folder window sitting behind
+    // one of those was silently reported as no folder at all.
+    t.expect(finderScript.contains("front Finder window"),
+             "Finder script targets the folder-window class, not any front window")
+    t.expect(!finderScript.contains("front window as alias"),
+             "Finder script does not ask a non-folder window for its target")
+
+    // Classification end to end, with the rule shapes a folder actually needs.
+    let finderToml = """
+    default = "unclear"
+
+    [[rule]]
+    app = "com.apple.finder"
+    context = "*/Casey/Work"
+    category = "work"
+
+    [[rule]]
+    app = "com.apple.finder"
+    context = "*/Casey/Work/*"
+    category = "work"
+
+    [[rule]]
+    app = "com.apple.finder"
+    context = "*/Casey/Projects"
+    category = "pet-project"
+
+    [[rule]]
+    app = "com.apple.finder"
+    context = "*/Casey/Projects/*"
+    category = "pet-project"
+
+    [[rule]]
+    app = "com.apple.finder"
+    category = "Misc"
+    """
+    let rsF = try! parseRules(finderToml, homeDirectory: "/Users/alex")
+    func finderIv(_ ctx: String?) -> Interval {
+        mkInterval(bundle: "com.apple.finder", name: "Finder", ctx: ctx)
+    }
+    t.eq(classify(finderIv("/Users/alex/Desktop/Casey/Work"), with: rsF), "work",
+         "the Work folder itself classifies as work")
+    t.eq(classify(finderIv("/Users/alex/Desktop/Casey/Work/docs"), with: rsF), "work",
+         "a folder inside Work classifies as work")
+    t.eq(classify(finderIv("/Users/alex/Desktop/Casey/Projects"), with: rsF), "pet-project",
+         "the Projects folder itself classifies as pet-project")
+    t.eq(classify(finderIv("/Users/alex/Desktop/Casey/Projects/stalker"), with: rsF), "pet-project",
+         "a folder inside Projects classifies as pet-project")
+    t.eq(classify(finderIv("/Users/alex/Desktop/Casey/Workspace"), with: rsF), "Misc",
+         "a sibling of Work is not swept into work by the glob")
+    t.eq(classify(finderIv("/Users/alex/Downloads"), with: rsF), "Misc",
+         "any other folder falls to the tier-3 Finder rule")
+    t.eq(classify(finderIv(nil), with: rsF), "Misc",
+         "Finder with no folder captured still classifies, never unclear")
+
+    // Live smoke: whether Finder has a window, and which, is state this suite must
+    // not depend on. Only the shape of the answer is asserted.
+    let liveFolder = FinderFolderProbe().folder()
+    t.expect(liveFolder == nil || liveFolder!.hasPrefix("/"),
+             "live Finder probe returns nil or an absolute path (got \(liveFolder ?? "nil"))")
+    t.expect(liveFolder == nil || !liveFolder!.hasSuffix("/") || liveFolder! == "/",
+             "live Finder probe never returns a trailing slash")
+
+    // --- Subcategories: "parent/child" categories roll up ---
+    // A category can be specific and countable at once. YouTube in Edge deserves
+    // its own name, but the day's `fun` figure is a lie if that time sits in a
+    // separate bucket beside it rather than inside it.
+    t.eq(categoryParent("fun/Youtube"), "fun", "the parent is the half before the slash")
+    t.eq(categoryLeaf("fun/Youtube"), "Youtube", "the child is the half after it")
+    t.eq(categoryParent("fun"), "fun", "a plain category is its own parent")
+    t.eq(categoryLeaf("fun"), nil, "a plain category has no child")
+    t.eq(categoryLeaf("fun/"), nil, "a trailing slash names no child")
+    t.eq(categoryParent("fun/"), "fun", "a trailing slash still yields the parent")
+    // A leading slash would otherwise produce an empty parent that swallows every
+    // such category into one nameless bucket.
+    t.eq(categoryParent("/Youtube"), "/Youtube", "an empty parent is refused; the name stands whole")
+    t.eq(categoryLeaf("/Youtube"), nil, "an empty parent means there is no child either")
+
+    let subToml = """
+    default = "unclear"
+
+    [[rule]]
+    app = "com.microsoft.edgemac"
+    context = "*youtube.com/*"
+    category = "fun/Youtube"
+
+    [[rule]]
+    app = "com.microsoft.edgemac"
+    category = "fun"
+    """
+    let subRules = try! parseRules(subToml, homeDirectory: "/Users/alex")
+    let subIvs = [
+        mkIv(0, 600, bundle: "com.microsoft.edgemac", ctx: "www.youtube.com/watch"),
+        mkIv(600, 900, bundle: "com.microsoft.edgemac", ctx: "news.bbc.co.uk/"),
+    ]
+    let subTot = totals(slice(subIvs, bucketSecs: 1800, rules: subRules))
+    t.eq(subTot.count, 1, "a subcategory does not create a second top-level category")
+    t.eq(subTot.first?.category, "fun", "the total is filed under the parent")
+    t.eq(subTot.first?.seconds, 900, "the parent total includes its subcategory's time")
+    t.eq(subTot.first?.subcategories.count, 1, "the subcategory is carried on the parent")
+    t.eq(subTot.first?.subcategories.first?.name, "Youtube", "the subcategory keeps its own name")
+    t.eq(subTot.first?.subcategories.first?.seconds, 600, "the subcategory keeps its own total")
+    t.eq(subTot.first?.subcategories.first?.byContext.first?.label, "www.youtube.com/watch",
+         "the subcategory carries its own context breakdown")
+    // The parent's own context list must not repeat the child's, or the breakdown
+    // would double-count what the eye reads as a sum.
+    t.eq(subTot.first?.byContext.count, 1, "the parent lists only time filed directly against it")
+    t.eq(subTot.first?.byContext.first?.label, "news.bbc.co.uk/", "and that one is the non-YouTube context")
+
+    let subText = render(subIvs, bucketSecs: 1800, rules: subRules,
+                         timeZone: TimeZone(identifier: "UTC")!)
+    t.expect(subText.contains("\n  fun"), "the rendered parent appears at top level")
+    t.expect(subText.contains("\n    Youtube"), "the subcategory is indented under it")
+    // A lone context under a subcategory restates the subtotal above it, so it is
+    // dropped rather than printed twice.
+    // Scoped to the indented totals line: the bucket timeline above legitimately
+    // names the same context, so a bare substring check would always fail.
+    t.expect(!subText.contains("\n      www.youtube.com/watch"),
+             "a subcategory's only context is not printed, being a restatement of its total")
+    // But the parent's lone direct context IS kept here: with a subcategory present
+    // it accounts for part of the total, not all of it, so dropping it would leave
+    // the arithmetic unexplained.
+    t.expect(subText.contains("news.bbc.co.uk/"),
+             "a parent with subcategories still lists its own single context")
+
+    // Two contexts under a subcategory do earn their lines.
+    let twoSubIvs = [
+        mkIv(0, 600, bundle: "com.microsoft.edgemac", ctx: "www.youtube.com/watch"),
+        mkIv(600, 900, bundle: "com.microsoft.edgemac", ctx: "www.youtube.com/playlist"),
+    ]
+    let twoSubText = render(twoSubIvs, bucketSecs: 1800, rules: subRules,
+                            timeZone: TimeZone(identifier: "UTC")!)
+    t.expect(twoSubText.contains("\n      www.youtube.com/watch")
+             && twoSubText.contains("\n      www.youtube.com/playlist"),
+             "a subcategory with two contexts lists both")
+
+    // A plain category whose single context is the whole of it drops that line too.
+    let loneIvs = [mkIv(0, 600, bundle: nil, ctx: nil, kind: .locked)]
+    let loneText = render(loneIvs, bucketSecs: 1800, rules: subRules,
+                          timeZone: TimeZone(identifier: "UTC")!)
+    t.expect(loneText.contains("locked"), "the category itself is still reported")
+    t.expect(!loneText.contains("(unknown)"),
+             "a category's only context is not printed under it")
+    t.expect(!subText.contains("\n  Youtube"),
+             "the subcategory never appears as a top-level category of its own")
 
     return t.summary()
 }

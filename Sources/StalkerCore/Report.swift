@@ -67,10 +67,40 @@ public struct ContextTotal: Equatable, Sendable {
     public let seconds: Int
 }
 
-public struct CategoryTotal: Equatable, Sendable {
-    public let category: String
+public struct SubcategoryTotal: Equatable, Sendable {
+    public let name: String
     public let seconds: Int
     public let byContext: [ContextTotal]
+}
+
+public struct CategoryTotal: Equatable, Sendable {
+    public let category: String
+    /// Includes every subcategory, so a parent total is the whole of what was spent
+    /// under it.
+    public let seconds: Int
+    /// Only the time filed directly against the parent, never a subcategory's.
+    public let byContext: [ContextTotal]
+    public let subcategories: [SubcategoryTotal]
+}
+
+/// A category may name a parent with a slash, as in "fun/Youtube".
+///
+/// This exists so a category can be both specific and countable. YouTube in Edge
+/// deserves its own name, but the day's `fun` figure is a lie if that time sits in
+/// a separate bucket beside it. The parent carries the total; the child stays
+/// visible underneath.
+public func categoryParent(_ category: String) -> String {
+    guard let slash = category.firstIndex(of: "/") else { return category }
+    let parent = String(category[category.startIndex..<slash])
+    return parent.isEmpty ? category : parent
+}
+
+/// The child half of a "parent/child" category, or nil for a plain one.
+public func categoryLeaf(_ category: String) -> String? {
+    guard let slash = category.firstIndex(of: "/"),
+          !String(category[category.startIndex..<slash]).isEmpty else { return nil }
+    let leaf = String(category[category.index(after: slash)...])
+    return leaf.isEmpty ? nil : leaf
 }
 
 /// Totals per category, each broken down by context.
@@ -79,21 +109,39 @@ public struct CategoryTotal: Equatable, Sendable {
 /// fact, so youtube time sitting inside `work` must be visible rather than
 /// folded into a flattering total. Spec §8.
 public func totals(_ slices: [Slice]) -> [CategoryTotal] {
-    var byCategory: [String: Int] = [:]
-    var byCategoryContext: [String: [String: Int]] = [:]
+    var parentSeconds: [String: Int] = [:]
+    var directContext: [String: [String: Int]] = [:]
+    var subSeconds: [String: [String: Int]] = [:]
+    var subContext: [String: [String: [String: Int]]] = [:]
 
     for s in slices {
-        byCategory[s.category, default: 0] += s.seconds
+        let parent = categoryParent(s.category)
         let label = s.context ?? s.appName ?? "(unknown)"
-        byCategoryContext[s.category, default: [:]][label, default: 0] += s.seconds
+        parentSeconds[parent, default: 0] += s.seconds
+        if let leaf = categoryLeaf(s.category) {
+            subSeconds[parent, default: [:]][leaf, default: 0] += s.seconds
+            subContext[parent, default: [:]][leaf, default: [:]][label, default: 0] += s.seconds
+        } else {
+            directContext[parent, default: [:]][label, default: 0] += s.seconds
+        }
     }
 
-    return byCategory
-        .map { cat, secs in
-            let contexts = (byCategoryContext[cat] ?? [:])
-                .map { ContextTotal(label: $0.key, seconds: $0.value) }
-                .sorted { ($0.seconds, $1.label) > ($1.seconds, $0.label) }
-            return CategoryTotal(category: cat, seconds: secs, byContext: contexts)
+    func ranked(_ m: [String: Int]) -> [ContextTotal] {
+        m.map { ContextTotal(label: $0.key, seconds: $0.value) }
+            .sorted { ($0.seconds, $1.label) > ($1.seconds, $0.label) }
+    }
+
+    return parentSeconds
+        .map { parent, secs in
+            let subs = (subSeconds[parent] ?? [:])
+                .map { name, ss in
+                    SubcategoryTotal(name: name, seconds: ss,
+                                     byContext: ranked(subContext[parent]?[name] ?? [:]))
+                }
+                .sorted { ($0.seconds, $1.name) > ($1.seconds, $0.name) }
+            return CategoryTotal(category: parent, seconds: secs,
+                                 byContext: ranked(directContext[parent] ?? [:]),
+                                 subcategories: subs)
         }
         .sorted { ($0.seconds, $1.category) > ($1.seconds, $0.category) }
 }
@@ -116,10 +164,19 @@ public func render(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZone:
     var lines: [String] = []
 
     // Per bucket, the category that took the most time, with its top context.
+    //
+    // "Most time" means total seconds across every fragment of that category in
+    // the bucket, not whichever single fragment happens to be longest — three
+    // short Slack visits summing to more than one long Chrome visit must still
+    // show as Slack's category.
     let buckets = Set(all.map(\.bucketStart)).sorted()
     for b in buckets {
         let here = all.filter { $0.bucketStart == b }
-        guard let top = here.max(by: { $0.seconds < $1.seconds }) else { continue }
+        var secondsByCategory: [String: Int] = [:]
+        for s in here { secondsByCategory[s.category, default: 0] += s.seconds }
+        guard let winningCategory = secondsByCategory.max(by: { $0.value < $1.value })?.key,
+              let top = here.filter({ $0.category == winningCategory })
+                            .max(by: { $0.seconds < $1.seconds }) else { continue }
         let label = top.context ?? top.appName ?? "—"
         lines.append("\(hhmm(b, timeZone)) ─ \(hhmm(b + bucketSecs, timeZone))   "
                      + top.category.padding(toLength: 12, withPad: " ", startingAt: 0)
@@ -130,8 +187,27 @@ public func render(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZone:
     lines.append("TOTALS")
     for ct in totals(all) {
         lines.append("  " + ct.category.padding(toLength: 14, withPad: " ", startingAt: 0) + dur(ct.seconds))
-        for c in ct.byContext.prefix(6) {
-            lines.append("    " + c.label.padding(toLength: 44, withPad: " ", startingAt: 0) + dur(c.seconds))
+        // Subcategories first, each with its own contexts indented under it. The
+        // extra indent is what distinguishes a subcategory subtotal from one of the
+        // parent's own context lines at the same level.
+        for sub in ct.subcategories {
+            lines.append("    " + sub.name.padding(toLength: 44, withPad: " ", startingAt: 0) + dur(sub.seconds))
+            // A lone context under a subcategory accounts for all of it, so the line
+            // restates the subtotal directly above with nothing added. Two or more
+            // earn their place by showing how the time divides.
+            if sub.byContext.count > 1 {
+                for c in sub.byContext.prefix(4) {
+                    lines.append("      " + c.label.padding(toLength: 42, withPad: " ", startingAt: 0) + dur(c.seconds))
+                }
+            }
+        }
+        // Same rule for the parent, but only when it has no subcategories. With one,
+        // a lone direct context is a part of the total rather than the whole of it —
+        // dropping it would leave the arithmetic unexplained.
+        if ct.byContext.count > 1 || !ct.subcategories.isEmpty {
+            for c in ct.byContext.prefix(6) {
+                lines.append("    " + c.label.padding(toLength: 44, withPad: " ", startingAt: 0) + dur(c.seconds))
+            }
         }
     }
     return lines.joined(separator: "\n")

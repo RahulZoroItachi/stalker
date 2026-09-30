@@ -47,7 +47,7 @@ public func makeSample(now: Int, previous: Sample?, config: TickConfig, probes: 
         // Terminals are served by the courier, not by Accessibility: macOS
         // exposes no way to ask which terminal tab has focus. Spec §5.3.
         if let bundle = focus.bundleId, config.terminalBundleIds.contains(bundle),
-           let reading = probes.courier.newest(now: now) {
+           let reading = probes.courier.newest(now: now, bundleId: bundle) {
             contextKind = .cwd
             context = reading.cwd
         } else {

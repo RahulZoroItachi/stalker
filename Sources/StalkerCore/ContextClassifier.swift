@@ -15,11 +15,17 @@ public func classifyContextValue(axURL: String?, axDocument: String?, axTitle: S
     }
 
     if let doc = axDocument, !doc.isEmpty {
-        // kAXDocument is a file URL; store the plain path so path rules match it.
-        let path = doc.hasPrefix("file://")
-            ? (URL(string: doc)?.path ?? doc)
-            : doc
-        if !path.isEmpty { return .value(.file, path, title: title) }
+        // kAXDocument is usually a file URL, but Chrome has been observed putting
+        // the tab's http(s) URL there when AXURL is absent — trust the scheme,
+        // not the attribute name, or web pages get filed as local files.
+        if isFileURL(doc) {
+            let path = URL(string: doc)?.path ?? doc
+            if !path.isEmpty { return .value(.file, path, title: title) }
+        } else if let normalized = normalizeURL(doc) {
+            return .value(.url, normalized, title: title)
+        } else if !doc.isEmpty {
+            return .value(.file, doc, title: title)
+        }
     }
 
     if let title { return .value(.title, title, title: title) }

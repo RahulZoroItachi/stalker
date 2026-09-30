@@ -27,9 +27,11 @@ func makeProbes() -> Probes {
            idle: SystemIdleProbe(),
            lock: SystemLockProbe(),
            engagement: PowerAssertionProbe(),
-           context: FallbackContextProbe(primary: AccessibilityContextProbe(),
-                                         fallback: BrowserAppleScriptProbe(),
-                                         browserBundleIds: browserBundleIds),
+           context: FinderContextProbe(
+               primary: FallbackContextProbe(primary: AccessibilityContextProbe(),
+                                             fallback: BrowserAppleScriptProbe(),
+                                             browserBundleIds: browserBundleIds),
+               folder: FinderFolderProbe()),
            courier: DirectoryCourierProbe(dir: paths.courierDir))
 }
 
@@ -101,6 +103,41 @@ func runDoctor() -> Int32 {
 
     check(SystemFocusProbe().frontmost() != nil, "focus probe works")
     check(SystemIdleProbe().inputIdleSeconds() >= 0, "idle probe works")
+
+    // Automation to Finder is a separate grant from Accessibility, and the first
+    // request for it prompts. Under launchd there is nobody to answer the prompt,
+    // so it has to be triggered once from a terminal — which is what this does.
+    // Finder showing only the desktop legitimately has no folder, so a nil here
+    // is reported rather than failed.
+    if let folder = FinderFolderProbe().folder() {
+        print("  ok   Finder folder probe: \(folder)")
+    } else {
+        print("  ok   Finder folder probe returned nothing")
+        print("       → expected if Finder has no window open; otherwise grant")
+        print("         System Settings → Privacy & Security → Automation → Finder")
+    }
+
+    // An ad-hoc signature is why a granted Accessibility permission stops working
+    // for no visible reason. Its designated requirement is the code hash, so TCC
+    // pins the grant to one exact build; the next build is a different program to
+    // it, while the entry in System Settings still reads as enabled. A certificate
+    // makes the requirement "identifier + leaf cert", which survives rebuilds.
+    if let exe = Bundle.main.executableURL?.path {
+        let cs = Process()
+        cs.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        cs.arguments = ["-d", "-r-", exe]
+        let pipe = Pipe()
+        // codesign writes the requirement to stdout and its banner to stderr.
+        cs.standardOutput = pipe
+        cs.standardError = FileHandle.nullDevice
+        try? cs.run()
+        let dr = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                        encoding: .utf8) ?? ""
+        cs.waitUntilExit()
+        check(!dr.contains("cdhash"), "signing identity survives a rebuild",
+              "ad-hoc signed: every build invalidates the Accessibility grant while "
+              + "System Settings still shows it enabled. See scripts/install.sh")
+    }
 
     // Accessibility, plus the AX latency the spec leaves open as item 1.
     let trusted = AXIsProcessTrusted()

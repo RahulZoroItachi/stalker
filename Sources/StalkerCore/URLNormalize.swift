@@ -70,3 +70,17 @@ public func normalizeURL(_ raw: String) -> String? {
 
     return path.isEmpty ? host + "/" : host + path
 }
+
+/// Clean a folder path into the same shape every other context uses.
+///
+/// Finder reports a directory with a trailing slash, while a shell cwd never has
+/// one. Left alone, the same folder would appear as two separate rows in a
+/// report, and every rule naming a folder would need two patterns to catch both
+/// spellings. Anything that is not an absolute path is rejected: Finder returns
+/// an empty string for a window with no folder behind it.
+public func normalizeFolderPath(_ raw: String) -> String? {
+    var p = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard p.hasPrefix("/") else { return nil }
+    while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
+    return p
+}
