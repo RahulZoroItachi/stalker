@@ -1223,6 +1223,7 @@ import StalkerMac
     weekRenderTests(t)
     widthAndColorTests(t)
     reportArgsTests(t)
+    idleCountsTests(t)
 
     return t.summary()
 }

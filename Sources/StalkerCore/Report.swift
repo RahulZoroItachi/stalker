@@ -36,6 +36,32 @@ public struct Slice: Equatable, Sendable {
     public let engagedSeconds: Int
 }
 
+/// Which category an interval is filed under.
+///
+/// `app` time is classified by the rules. `idle` time normally is not, because no
+/// input means you walked away, and classifying it by whatever happened to be in
+/// focus would turn every coffee break into work. The exception is a rule that sets
+/// `idle_counts`: in a meeting you listen without touching anything, and nothing the
+/// sampler can see distinguishes that from an empty desk.
+///
+/// `locked` and `gap` are never reclassified. A locked screen means you left,
+/// whatever was on it, and a gap means there was nothing to classify.
+///
+/// An idle interval matching no rule stays `idle` rather than becoming the default
+/// category: the default exists for unclassified activity, and this is the absence
+/// of activity.
+func categoryFor(_ iv: Interval, rules: RuleSet) -> String {
+    switch iv.kind {
+    case .app:
+        return classify(iv, with: rules)
+    case .idle:
+        if let rule = matchingRule(iv, with: rules), rule.idleCounts { return rule.category }
+        return Kind.idle.rawValue
+    case .locked, .gap:
+        return iv.kind.rawValue
+    }
+}
+
 /// Cut intervals at bucket boundaries, classifying each as it goes.
 ///
 /// `from`/`to` clamp each interval to the window being reported. Without the
@@ -53,7 +79,7 @@ public func slice(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet,
         let start = max(iv.startedAt, lo)
         let end = min(max(iv.endedAt, iv.startedAt), hi)
         guard end > start else { continue }
-        let category = iv.kind == .app ? classify(iv, with: rules) : iv.kind.rawValue
+        let category = categoryFor(iv, rules: rules)
         // The counters are tick counts over the whole interval, so a slice gets the
         // same proportion of them as it does of the duration. A `gap` row carries
         // samples = 0, which is why this is a guard and not a plain divide.

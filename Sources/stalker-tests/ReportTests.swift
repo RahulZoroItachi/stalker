@@ -647,3 +647,106 @@ private func stripANSI(_ s: String) -> String {
     t.eq(parseArgs(["--help"]), Command.help, "--help asks for help")
     t.eq(parseArgs(["help"]), Command.help, "so does the bare word")
 }
+
+@MainActor func idleCountsTests(_ t: T) {
+    // --- the parser accepts an unquoted boolean ---
+    // TOML booleans are bare words. Requiring idle_counts = "true" would be
+    // non-standard and would read as a string that happens to spell a boolean.
+    let parsed = try? parseRules("""
+    default = "unclear"
+
+    [[rule]]
+    app_name = "Google Meet"
+    category = "work/Meeting"
+    idle_counts = true
+
+    [[rule]]
+    app = "com.apple.Terminal"
+    category = "work"
+    """, homeDirectory: "/Users/alex")
+    t.expect(parsed != nil, "a rule file with idle_counts parses")
+    let meetRule = parsed?.rules.first { $0.appName == "Google Meet" }
+    let termRule = parsed?.rules.first { $0.app == "com.apple.Terminal" }
+    t.eq(meetRule?.idleCounts, true, "idle_counts = true is read as true")
+    // Defaulting to false matters: every existing rule file omits the key, and idle
+    // must keep meaning "away" for all of them.
+    t.eq(termRule?.idleCounts, false, "a rule without idle_counts defaults to false")
+
+    func rejects(_ body: String, _ name: String) {
+        let r = try? parseRules("default = \"x\"\n\n[[rule]]\napp = \"a\"\ncategory = \"c\"\n\(body)",
+                                homeDirectory: "/Users/alex")
+        t.expect(r == nil, name)
+    }
+    rejects("idle_counts = maybe", "a non-boolean idle_counts is refused")
+    rejects("idle_counts = \"true\"", "a quoted idle_counts is refused, being the wrong type")
+    rejects("category = yes", "an unquoted string value is still refused")
+
+    // --- matchingRule, which is what lets the caller see the flag ---
+    let rules = RuleSet(defaultCategory: "unclear", rules: [
+        Rule(app: nil, appName: "Google Meet", context: nil, category: "work/Meeting", idleCounts: true),
+        Rule(app: "com.test.term", appName: nil, context: nil, category: "work", idleCounts: false),
+    ])
+    let meetIv = mkInterval(0, 600, bundle: "com.google.Chrome.app.abc", app: "Google Meet",
+                            ctx: nil, kind: .idle, samples: 20, active: 0)
+    t.eq(matchingRule(meetIv, with: rules)?.category, "work/Meeting", "the matching rule is returned")
+    t.eq(matchingRule(mkInterval(0, 60, bundle: "com.nope", app: "Nope"), with: rules)?.category, nil,
+         "no match returns nil rather than the default category")
+    // classify must keep behaving exactly as before.
+    t.eq(classify(meetIv, with: rules), "work/Meeting", "classify still returns the category")
+    t.eq(classify(mkInterval(0, 60, bundle: "com.nope", app: "Nope"), with: rules), "unclear",
+         "classify still falls back to the default")
+
+    // --- idle time is reclassified only when the rule opts in ---
+    let meetSlices = slice([meetIv], bucketSecs: 1800, rules: rules)
+    t.eq(meetSlices.first?.category, "work/Meeting",
+         "idle in an app whose rule opts in takes the rule's category")
+    // Walking away from a terminal must stay idle. Classifying all idle time by app
+    // would quietly turn every coffee break into work.
+    let termIdle = mkInterval(0, 600, bundle: "com.test.term", app: "Ghostty",
+                              ctx: "/a", kind: .idle, samples: 20, active: 0)
+    t.eq(slice([termIdle], bucketSecs: 1800, rules: rules).first?.category, "idle",
+         "idle in an app whose rule does not opt in stays idle")
+    // An idle interval matching no rule must not become the default category: the
+    // default is for unclassified ACTIVITY, and this is absence of activity.
+    let strangerIdle = mkInterval(0, 600, bundle: "com.unknown", app: "Unknown",
+                                  ctx: nil, kind: .idle, samples: 20, active: 0)
+    t.eq(slice([strangerIdle], bucketSecs: 1800, rules: rules).first?.category, "idle",
+         "idle matching no rule stays idle, not the default category")
+
+    // --- locked and gap are never reclassified ---
+    // A locked screen means you left, whatever was on it. Spec §5.2.
+    let meetLocked = mkInterval(0, 600, bundle: "com.google.Chrome.app.abc", app: "Google Meet",
+                                ctx: nil, kind: .locked, samples: 20, active: 0)
+    t.eq(slice([meetLocked], bucketSecs: 1800, rules: rules).first?.category, "locked",
+         "a locked screen stays locked even for an opted-in app")
+    let meetGap = mkInterval(0, 600, bundle: "com.google.Chrome.app.abc", app: "Google Meet",
+                             ctx: nil, kind: .gap, samples: 0, active: 0)
+    t.eq(slice([meetGap], bucketSecs: 1800, rules: rules).first?.category, "gap",
+         "a gap stays a gap even for an opted-in app")
+
+    // --- a context rule works too, so a call in any browser counts ---
+    let ctxRules = RuleSet(defaultCategory: "unclear", rules: [
+        Rule(app: nil, appName: nil, context: "*meet.google.com/*", category: "work/Meeting",
+             idleCounts: true),
+    ])
+    let browserIdle = mkInterval(0, 600, bundle: "com.microsoft.edgemac", app: "Microsoft Edge",
+                                 ctx: "meet.google.com/abc-defg-hij", kind: .idle,
+                                 samples: 20, active: 0)
+    t.eq(slice([browserIdle], bucketSecs: 1800, rules: ctxRules).first?.category, "work/Meeting",
+         "a context rule reclassifies idle in any browser")
+
+    // --- the reclassified time is honestly marked as hands-off ---
+    // It lands in work, but with no input, so work's active share falls. That is the
+    // only visible trace of "joined a meeting and wandered off".
+    let mixed = [
+        mkInterval(0, 600, bundle: "com.test.term", app: "Ghostty", ctx: "/a",
+                   kind: .app, samples: 20, active: 20),
+        meetIv,
+    ]
+    let tot = totals(slice(mixed, bucketSecs: 1800, rules: rules))
+    let work = tot.first { $0.category == "work" }
+    t.eq(work?.seconds, 1200, "both the typed and the listened time land under work")
+    t.eq(work?.activeSeconds, 600, "but only the typed half counts as active")
+    t.eq(percent(work?.activeSeconds ?? 0, of: work?.seconds ?? 1), 50,
+         "so the active share halves, which is the visible trace of listening")
+}

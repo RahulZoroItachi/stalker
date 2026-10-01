@@ -14,9 +14,20 @@ public struct Rule: Sendable, Equatable {
     public let appName: String?
     public let context: String?
     public let category: String
+    /// Does time with no input still count as this category?
+    ///
+    /// Off by default, because no input normally means you walked away. A meeting is
+    /// the exception: you listen without touching anything, and the engagement probe
+    /// cannot see it. Chrome takes no named "Playing audio" assertion the way Edge
+    /// does, and for a PWA the audio assertion is owned by `coreaudiod` with the real
+    /// process buried in a nested field. So a Meet call is indistinguishable from an
+    /// abandoned desk, and the rule file has to say which it is.
+    public let idleCounts: Bool
 
-    public init(app: String?, appName: String?, context: String?, category: String) {
+    public init(app: String?, appName: String?, context: String?, category: String,
+                idleCounts: Bool = false) {
         self.app = app; self.appName = appName; self.context = context; self.category = category
+        self.idleCounts = idleCounts
     }
 
     /// Specificity tier. Lower wins. Spec §7.2.
@@ -46,15 +57,17 @@ public enum RulesError: Error, Equatable, CustomStringConvertible {
     case missingCategory(line: Int)
     case keyOutsideRule(line: Int, key: String)
     case ruleMatchesEverything(line: Int)
+    case notABoolean(line: Int, key: String)
     case emptyRuleSet
 
     public var description: String {
         switch self {
         case .syntax(let l, let t):         return "rules.toml line \(l): cannot parse \"\(t)\""
-        case .unknownKey(let l, let k):     return "rules.toml line \(l): unknown key \"\(k)\" (expected app, app_name, context, or category)"
+        case .unknownKey(let l, let k):     return "rules.toml line \(l): unknown key \"\(k)\" (expected app, app_name, context, category, or idle_counts)"
         case .missingCategory(let l):       return "rules.toml line \(l): this [[rule]] has no category"
         case .keyOutsideRule(let l, let k): return "rules.toml line \(l): \"\(k)\" appears before any [[rule]] header"
         case .ruleMatchesEverything(let l): return "rules.toml line \(l): this [[rule]] has no app, app_name, or context, so it would match everything"
+        case .notABoolean(let l, let k):    return "rules.toml line \(l): \"\(k)\" expects true or false, unquoted"
         case .emptyRuleSet:                 return "rules.toml contains no [[rule]] blocks"
         }
     }
@@ -68,6 +81,7 @@ public func parseRules(_ text: String, homeDirectory: String) throws -> RuleSet 
     var rules: [Rule] = []
 
     var app: String?, appName: String?, context: String?, category: String?
+    var idleCounts = false
     var ruleStartLine = 0
     var inRule = false
 
@@ -77,8 +91,9 @@ public func parseRules(_ text: String, homeDirectory: String) throws -> RuleSet 
         guard app != nil || appName != nil || context != nil else {
             throw RulesError.ruleMatchesEverything(line: ruleStartLine)
         }
-        rules.append(Rule(app: app, appName: appName, context: context, category: cat))
-        app = nil; appName = nil; context = nil; category = nil
+        rules.append(Rule(app: app, appName: appName, context: context, category: cat,
+                          idleCounts: idleCounts))
+        app = nil; appName = nil; context = nil; category = nil; idleCounts = false
     }
 
     for (idx, rawLine) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
@@ -99,11 +114,25 @@ public func parseRules(_ text: String, homeDirectory: String) throws -> RuleSet 
             throw RulesError.syntax(line: lineNo, text: line)
         }
         let key = String(line[line.startIndex..<eq]).trimmingCharacters(in: .whitespaces)
-        var value = String(line[line.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
-        guard value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") else {
+        let raw = String(line[line.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+
+        // idle_counts is the one boolean key, and TOML booleans are bare words. It is
+        // handled before the quoted-string check so that a quoted "true" is refused as
+        // the wrong type rather than accepted as a string spelling a boolean.
+        if key == "idle_counts" {
+            guard inRule else { throw RulesError.keyOutsideRule(line: lineNo, key: key) }
+            switch raw {
+            case "true":  idleCounts = true
+            case "false": idleCounts = false
+            default:      throw RulesError.notABoolean(line: lineNo, key: key)
+            }
+            continue
+        }
+
+        guard raw.count >= 2, raw.hasPrefix("\""), raw.hasSuffix("\"") else {
             throw RulesError.syntax(line: lineNo, text: line)
         }
-        value = String(value.dropFirst().dropLast())
+        let value = String(raw.dropFirst().dropLast())
 
         if !inRule {
             guard key == "default" else { throw RulesError.keyOutsideRule(line: lineNo, key: key) }

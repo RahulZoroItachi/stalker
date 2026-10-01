@@ -19,9 +19,16 @@ app = "com.microsoft.edgemac"
 category = "fun"
 
 # PWA bundle ids are opaque, install-specific hashes, so match these by name.
+#
+# idle_counts: in a meeting you listen without touching anything, and nothing the
+# sampler can see tells that apart from an empty desk. Chrome takes no named
+# "Playing audio" assertion the way Edge does, and for a PWA the audio assertion is
+# owned by coreaudiod with the real process buried in a nested field — so Meet
+# measured engaged=0 across 132 samples. Without this flag a meeting reads as idle.
 [[rule]]
 app_name = "Google Meet"
-category = "work"
+category = "work/Meeting"
+idle_counts = true
 
 [[rule]]
 app_name = "Gmail"
@@ -68,3 +75,11 @@ category = "work"
 [[rule]]
 context = "*/Casey/Projects/*"
 category = "pet-project"
+
+# Zoom is a native app and DOES hold its own assertion, so it is sometimes caught as
+# engaged — but only while someone is audible. It still needs idle_counts for the
+# stretches where you are listening to a silent screen share.
+[[rule]]
+app = "us.zoom.xos"
+category = "work/Meeting"
+idle_counts = true

@@ -15,13 +15,19 @@ public func matches(_ rule: Rule, _ iv: Interval) -> Bool {
     return true
 }
 
+/// The rule that applies to this interval, if any. First match in tier order wins.
+///
+/// Exposed separately from `classify` because a caller sometimes needs the rule
+/// itself rather than only its category — `idle_counts` is a property of the rule,
+/// and the category alone cannot carry it.
+public func matchingRule(_ iv: Interval, with rs: RuleSet) -> Rule? {
+    rs.rules.first { matches($0, iv) }
+}
+
 /// Category for an interval. First match in tier order wins.
 ///
 /// Classification happens here, at read time, never at collection time — which
 /// is why a rule added in March re-classifies January. Spec §7.
 public func classify(_ iv: Interval, with rs: RuleSet) -> String {
-    for rule in rs.rules where matches(rule, iv) {
-        return rule.category
-    }
-    return rs.defaultCategory
+    matchingRule(iv, with: rs)?.category ?? rs.defaultCategory
 }
