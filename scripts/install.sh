@@ -30,8 +30,9 @@ else
   echo "   WARNING: no '$SIGN_IDENTITY' code signing identity found."
   echo "            Leaving the binary ad-hoc signed, which means Accessibility"
   echo "            must be re-granted after every single build. To fix once:"
-  echo "            Keychain Access > Certificate Assistant > Create a Certificate"
-  echo "            name '$SIGN_IDENTITY', Self Signed Root, type Code Signing."
+  echo "              ./scripts/make-signing-cert.sh"
+  echo "            (Keychain Access, which this used to point at, no longer ships"
+  echo "             on macOS 26, so the certificate is made from the CLI instead.)"
 fi
 
 echo "2. creating directories"
