@@ -252,9 +252,10 @@ most of the tests.
 
 ## 11. Open items
 
-1. **Whether `movies` and `anime` should be one activity.** The user listed both.
-   Kept separate until the data says otherwise, since merging later is a one-line
-   config edit and splitting later is not.
+1. **Whether `series` deserves its own activity, separate from `movies`.** The
+   original list said "Movies/Series" as one item, and a name cannot contain `/`
+   (§3), so it is `movies` for now and covers both. Splitting it later is a one-line
+   config edit. Confirmed separately that `movies` and `anime` stay distinct.
 2. **Whether `unaccounted` should break down further.** Right now it is locked plus
    gap. Once sleep is logged nightly, what remains may turn out to be mostly dark
    wake, which is a collection problem rather than a reporting one.
