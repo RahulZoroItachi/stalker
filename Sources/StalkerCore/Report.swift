@@ -29,6 +29,11 @@ public struct Slice: Equatable, Sendable {
     public let appName: String?
     public let context: String?
     public let seconds: Int
+    /// Of `seconds`, how many were hands-on, apportioned from the interval's
+    /// `active / samples` ratio.
+    public let activeSeconds: Int
+    /// Of `seconds`, how many had media playing, apportioned the same way.
+    public let engagedSeconds: Int
 }
 
 /// Cut intervals at bucket boundaries, classifying each as it goes.
@@ -49,12 +54,19 @@ public func slice(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet,
         let end = min(max(iv.endedAt, iv.startedAt), hi)
         guard end > start else { continue }
         let category = iv.kind == .app ? classify(iv, with: rules) : iv.kind.rawValue
+        // The counters are tick counts over the whole interval, so a slice gets the
+        // same proportion of them as it does of the duration. A `gap` row carries
+        // samples = 0, which is why this is a guard and not a plain divide.
+        let activeRatio = iv.samples > 0 ? Double(iv.active) / Double(iv.samples) : 0
+        let engagedRatio = iv.samples > 0 ? Double(iv.engaged) / Double(iv.samples) : 0
         var b = bucketStart(start, bucketSecs: bucketSecs)
         while b < end {
             let secs = max(0, min(end, b + bucketSecs) - max(start, b))
             if secs > 0 {
                 out.append(Slice(bucketStart: b, category: category, kind: iv.kind,
-                                 appName: iv.appName, context: iv.context, seconds: secs))
+                                 appName: iv.appName, context: iv.context, seconds: secs,
+                                 activeSeconds: min(secs, Int((Double(secs) * activeRatio).rounded())),
+                                 engagedSeconds: min(secs, Int((Double(secs) * engagedRatio).rounded()))))
             }
             b += bucketSecs
         }
@@ -70,6 +82,8 @@ public struct ContextTotal: Equatable, Sendable {
 public struct SubcategoryTotal: Equatable, Sendable {
     public let name: String
     public let seconds: Int
+    public let activeSeconds: Int
+    public let engagedSeconds: Int
     public let byContext: [ContextTotal]
 }
 
@@ -81,6 +95,11 @@ public struct CategoryTotal: Equatable, Sendable {
     /// Only the time filed directly against the parent, never a subcategory's.
     public let byContext: [ContextTotal]
     public let subcategories: [SubcategoryTotal]
+    /// Hands-on seconds, including every subcategory's, so it is comparable with
+    /// `seconds`.
+    public let activeSeconds: Int
+    /// Seconds with media playing, including every subcategory's.
+    public let engagedSeconds: Int
 }
 
 /// A category may name a parent with a slash, as in "fun/Youtube".
@@ -110,16 +129,24 @@ public func categoryLeaf(_ category: String) -> String? {
 /// folded into a flattering total. Spec §8.
 public func totals(_ slices: [Slice]) -> [CategoryTotal] {
     var parentSeconds: [String: Int] = [:]
+    var parentActive: [String: Int] = [:]
+    var parentEngaged: [String: Int] = [:]
     var directContext: [String: [String: Int]] = [:]
     var subSeconds: [String: [String: Int]] = [:]
+    var subActive: [String: [String: Int]] = [:]
+    var subEngaged: [String: [String: Int]] = [:]
     var subContext: [String: [String: [String: Int]]] = [:]
 
     for s in slices {
         let parent = categoryParent(s.category)
         let label = s.context ?? s.appName ?? "(unknown)"
         parentSeconds[parent, default: 0] += s.seconds
+        parentActive[parent, default: 0] += s.activeSeconds
+        parentEngaged[parent, default: 0] += s.engagedSeconds
         if let leaf = categoryLeaf(s.category) {
             subSeconds[parent, default: [:]][leaf, default: 0] += s.seconds
+            subActive[parent, default: [:]][leaf, default: 0] += s.activeSeconds
+            subEngaged[parent, default: [:]][leaf, default: 0] += s.engagedSeconds
             subContext[parent, default: [:]][leaf, default: [:]][label, default: 0] += s.seconds
         } else {
             directContext[parent, default: [:]][label, default: 0] += s.seconds
@@ -136,79 +163,16 @@ public func totals(_ slices: [Slice]) -> [CategoryTotal] {
             let subs = (subSeconds[parent] ?? [:])
                 .map { name, ss in
                     SubcategoryTotal(name: name, seconds: ss,
+                                     activeSeconds: subActive[parent]?[name] ?? 0,
+                                     engagedSeconds: subEngaged[parent]?[name] ?? 0,
                                      byContext: ranked(subContext[parent]?[name] ?? [:]))
                 }
                 .sorted { ($0.seconds, $1.name) > ($1.seconds, $0.name) }
             return CategoryTotal(category: parent, seconds: secs,
                                  byContext: ranked(directContext[parent] ?? [:]),
-                                 subcategories: subs)
+                                 subcategories: subs,
+                                 activeSeconds: parentActive[parent] ?? 0,
+                                 engagedSeconds: parentEngaged[parent] ?? 0)
         }
         .sorted { ($0.seconds, $1.category) > ($1.seconds, $0.category) }
-}
-
-private func hhmm(_ ts: Int, _ tz: TimeZone) -> String {
-    let f = DateFormatter()
-    f.timeZone = tz
-    f.dateFormat = "HH:mm"
-    return f.string(from: Date(timeIntervalSince1970: TimeInterval(ts)))
-}
-
-private func dur(_ secs: Int) -> String {
-    let h = secs / 3600, m = (secs % 3600) / 60
-    return h > 0 ? "\(h)h \(String(format: "%02d", m))m" : "\(m)m"
-}
-
-public func render(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZone: TimeZone,
-                   from: Int? = nil, to: Int? = nil) -> String {
-    let all = slice(ivs, bucketSecs: bucketSecs, rules: rules, from: from, to: to)
-    var lines: [String] = []
-
-    // Per bucket, the category that took the most time, with its top context.
-    //
-    // "Most time" means total seconds across every fragment of that category in
-    // the bucket, not whichever single fragment happens to be longest — three
-    // short Slack visits summing to more than one long Chrome visit must still
-    // show as Slack's category.
-    let buckets = Set(all.map(\.bucketStart)).sorted()
-    for b in buckets {
-        let here = all.filter { $0.bucketStart == b }
-        var secondsByCategory: [String: Int] = [:]
-        for s in here { secondsByCategory[s.category, default: 0] += s.seconds }
-        guard let winningCategory = secondsByCategory.max(by: { $0.value < $1.value })?.key,
-              let top = here.filter({ $0.category == winningCategory })
-                            .max(by: { $0.seconds < $1.seconds }) else { continue }
-        let label = top.context ?? top.appName ?? "—"
-        lines.append("\(hhmm(b, timeZone)) ─ \(hhmm(b + bucketSecs, timeZone))   "
-                     + top.category.padding(toLength: 12, withPad: " ", startingAt: 0)
-                     + "\(top.appName ?? "—")  \(label)")
-    }
-
-    lines.append("")
-    lines.append("TOTALS")
-    for ct in totals(all) {
-        lines.append("  " + ct.category.padding(toLength: 14, withPad: " ", startingAt: 0) + dur(ct.seconds))
-        // Subcategories first, each with its own contexts indented under it. The
-        // extra indent is what distinguishes a subcategory subtotal from one of the
-        // parent's own context lines at the same level.
-        for sub in ct.subcategories {
-            lines.append("    " + sub.name.padding(toLength: 44, withPad: " ", startingAt: 0) + dur(sub.seconds))
-            // A lone context under a subcategory accounts for all of it, so the line
-            // restates the subtotal directly above with nothing added. Two or more
-            // earn their place by showing how the time divides.
-            if sub.byContext.count > 1 {
-                for c in sub.byContext.prefix(4) {
-                    lines.append("      " + c.label.padding(toLength: 42, withPad: " ", startingAt: 0) + dur(c.seconds))
-                }
-            }
-        }
-        // Same rule for the parent, but only when it has no subcategories. With one,
-        // a lone direct context is a part of the total rather than the whole of it —
-        // dropping it would leave the arithmetic unexplained.
-        if ct.byContext.count > 1 || !ct.subcategories.isEmpty {
-            for c in ct.byContext.prefix(6) {
-                lines.append("    " + c.label.padding(toLength: 44, withPad: " ", startingAt: 0) + dur(c.seconds))
-            }
-        }
-    }
-    return lines.joined(separator: "\n")
 }

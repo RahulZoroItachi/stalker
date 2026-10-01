@@ -505,7 +505,8 @@ import StalkerMac
     t.eq(driftTotals.first?.byContext.first?.seconds, 600,
          "context breakdown is sorted by seconds descending")
 
-    let text = render(mixed, bucketSecs: 1800, rules: reportRules, timeZone: TimeZone(identifier: "UTC")!)
+    let text = renderDay(mixed, bucketSecs: 1800, rules: reportRules,
+                         timeZone: TimeZone(identifier: "UTC")!, from: 0, to: 86_400)
     t.expect(text.contains("work"), "rendered report names categories")
     t.expect(text.contains("TOTALS"), "rendered report has a totals section")
     t.expect(text.contains("unclear"), "rendered report surfaces unclear time")
@@ -519,9 +520,12 @@ import StalkerMac
         mkIv(400, 900, bundle: "com.microsoft.edgemac", ctx: nil),
         mkIv(900, 1200, bundle: "com.tinyspeck.slackmacgap", ctx: nil),
     ]
-    let dominanceText = render(dominance, bucketSecs: 1800, rules: reportRules,
-                               timeZone: TimeZone(identifier: "UTC")!)
-    let timelineRow = dominanceText.components(separatedBy: "\n").first ?? ""
+    let dominanceText = renderDay(dominance, bucketSecs: 1800, rules: reportRules,
+                                  timeZone: TimeZone(identifier: "UTC")!, from: 0, to: 86_400)
+    // The report opens with a date heading, so the first timeline row is the first
+    // line carrying a time span rather than simply the first line.
+    let timelineRow = dominanceText.components(separatedBy: "\n")
+        .first { $0.contains("─") } ?? ""
     t.expect(timelineRow.contains("unclear"),
              "the category with more total time (unclear, 700s) wins the row, got: \(timelineRow)")
     t.expect(!timelineRow.contains("fun"),
@@ -772,12 +776,14 @@ import StalkerMac
 
     t.eq(parseArgs(["sample"]), Command.sample, "parses sample")
     t.eq(parseArgs(["doctor"]), Command.doctor, "parses doctor")
-    t.eq(parseArgs(["report"]), Command.report(date: nil), "parses report with no date")
-    t.eq(parseArgs(["report", "--date", "2026-09-30"]), Command.report(date: "2026-09-30"),
+    t.eq(parseArgs(["report"]), Command.report(ReportRequest()), "parses report with no date")
+    t.eq(parseArgs(["report", "--date", "2026-09-30"]), Command.report(ReportRequest(date: "2026-09-30")),
          "parses report with a date")
     t.eq(parseArgs([]), Command.help, "no arguments yields help")
-    t.eq(parseArgs(["bogus"]), Command.help, "unknown command yields help")
-    t.eq(parseArgs(["report", "--date"]), Command.help, "--date with no value yields help")
+    // Malformed arguments are a usage error, not a help request, so the process exits
+    // non-zero. See reportArgsTests for the full set.
+    t.eq(parseArgs(["bogus"]), Command.usageError, "unknown command is a usage error")
+    t.eq(parseArgs(["report", "--date"]), Command.usageError, "--date with no value is a usage error")
 
     let utc = TimeZone(identifier: "UTC")!
     let r = dayRange("2026-09-30", now: 0, timeZone: utc)
@@ -1172,8 +1178,8 @@ import StalkerMac
     t.eq(subTot.first?.byContext.count, 1, "the parent lists only time filed directly against it")
     t.eq(subTot.first?.byContext.first?.label, "news.bbc.co.uk/", "and that one is the non-YouTube context")
 
-    let subText = render(subIvs, bucketSecs: 1800, rules: subRules,
-                         timeZone: TimeZone(identifier: "UTC")!)
+    let subText = renderDay(subIvs, bucketSecs: 1800, rules: subRules,
+                            timeZone: TimeZone(identifier: "UTC")!, from: 0, to: 86_400)
     t.expect(subText.contains("\n  fun"), "the rendered parent appears at top level")
     t.expect(subText.contains("\n    Youtube"), "the subcategory is indented under it")
     // A lone context under a subcategory restates the subtotal above it, so it is
@@ -1193,21 +1199,30 @@ import StalkerMac
         mkIv(0, 600, bundle: "com.microsoft.edgemac", ctx: "www.youtube.com/watch"),
         mkIv(600, 900, bundle: "com.microsoft.edgemac", ctx: "www.youtube.com/playlist"),
     ]
-    let twoSubText = render(twoSubIvs, bucketSecs: 1800, rules: subRules,
-                            timeZone: TimeZone(identifier: "UTC")!)
+    let twoSubText = renderDay(twoSubIvs, bucketSecs: 1800, rules: subRules,
+                               timeZone: TimeZone(identifier: "UTC")!, from: 0, to: 86_400)
     t.expect(twoSubText.contains("\n      www.youtube.com/watch")
              && twoSubText.contains("\n      www.youtube.com/playlist"),
              "a subcategory with two contexts lists both")
 
     // A plain category whose single context is the whole of it drops that line too.
     let loneIvs = [mkIv(0, 600, bundle: nil, ctx: nil, kind: .locked)]
-    let loneText = render(loneIvs, bucketSecs: 1800, rules: subRules,
-                          timeZone: TimeZone(identifier: "UTC")!)
+    let loneText = renderDay(loneIvs, bucketSecs: 1800, rules: subRules,
+                             timeZone: TimeZone(identifier: "UTC")!, from: 0, to: 86_400)
     t.expect(loneText.contains("locked"), "the category itself is still reported")
     t.expect(!loneText.contains("(unknown)"),
              "a category's only context is not printed under it")
     t.expect(!subText.contains("\n  Youtube"),
              "the subcategory never appears as a top-level category of its own")
+
+    formatTests(t)
+    engagementShareTests(t)
+    dayRenderTests(t)
+    dayLayoutTests(t)
+    weekRangeTests(t)
+    weekRenderTests(t)
+    widthAndColorTests(t)
+    reportArgsTests(t)
 
     return t.summary()
 }

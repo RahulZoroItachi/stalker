@@ -58,20 +58,39 @@ func runSample() -> Int32 {
     }
 }
 
-func runReport(date: String?) -> Int32 {
+func runReport(_ req: ReportRequest) -> Int32 {
     guard let rules = loadRules() else { return 1 }
     do {
         let store = try Store(path: paths.dbPath)
         try store.migrate()
         let tz = TimeZone.current
-        let range = dayRange(date, now: Int(Date().timeIntervalSince1970), timeZone: tz)
-        let ivs = try store.intervals(from: range.from, to: range.to)
-        if ivs.isEmpty {
-            print("no data for that day")
-            return 0
+        let now = Int(Date().timeIntervalSince1970)
+        // An explicit --width is clamped too: the layout cannot hold its columns below
+        // 80, and honouring a nonsense value would only produce a broken table.
+        let options = RenderOptions(width: clampWidth(req.width ?? detectedWidth()),
+                                    color: req.color ?? stdoutIsTerminal(),
+                                    home: home)
+
+        let range: (from: Int, to: Int)
+        let week: Bool
+        switch req.span {
+        case .day:
+            range = dayRange(req.date, now: now, timeZone: tz)
+            week = false
+        case .week:
+            // Clamped to the end of today, so a week in progress does not print four
+            // empty rows for days that have not happened.
+            let full = weekRange(req.date, now: now, timeZone: tz)
+            range = (full.from, min(full.to, sinceRange(days: 1, now: now, timeZone: tz).to))
+            week = true
+        case .since(let days):
+            range = sinceRange(days: days, now: now, timeZone: tz)
+            week = true
         }
-        print(render(ivs, bucketSecs: bucketSeconds, rules: rules, timeZone: tz,
-                     from: range.from, to: range.to))
+
+        let ivs = try store.intervals(from: range.from, to: range.to)
+        let render = week ? renderWeek : renderDay
+        print(render(ivs, bucketSeconds, rules, tz, range.from, range.to, options))
         return 0
     } catch {
         FileHandle.standardError.write("report failed: \(error)\n".data(using: .utf8)!)
@@ -170,19 +189,36 @@ func runDoctor() -> Int32 {
     return problems == 0 ? 0 : 1
 }
 
+let usage = """
+stalker — local activity tracker
+
+  stalker sample     take one observation (launchd calls this)
+  stalker report     30-minute report, default today
+  stalker doctor     verify permissions and setup
+
+report options:
+  --date YYYY-MM-DD  the day to report, or the week containing it
+  --week             one row per day for the calendar week, Monday first
+  --since N          one row per day for the last N days, today included
+  --width N          lay out for N columns (80-160, default: the terminal's)
+  --no-color         plain text, as when piping to a file
+
+Time away from the machine is reported separately from activity, so the
+percentages describe what you did rather than how long the day was.
+"""
+
 let status: Int32
 switch parseArgs(Array(CommandLine.arguments.dropFirst())) {
 case .sample:              status = runSample()
-case .report(let date):    status = runReport(date: date)
+case .report(let r):       status = runReport(r)
 case .doctor:              status = runDoctor()
 case .help:
-    print("""
-    stalker — local activity tracker
-
-      stalker sample                    take one observation (launchd calls this)
-      stalker report [--date YYYY-MM-DD] 30-minute report, default today
-      stalker doctor                    verify permissions and setup
-    """)
+    print(usage)
     status = 0
+case .usageError:
+    // Usage goes to stderr and the status is non-zero, so a mistyped flag in a script
+    // fails loudly instead of producing a plausible report for the wrong range.
+    FileHandle.standardError.write((usage + "\n").data(using: .utf8)!)
+    status = 2
 }
 exit(status)
