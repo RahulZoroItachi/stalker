@@ -47,7 +47,7 @@ the existing hand-rolled parser needs no new syntax.
 
 ```toml
 # Activities logged by hand with `stalker note`. Comma-separated.
-activities = "playing, workout, sleep, travel, anime, movies, reading"
+activities = "playing, workout, sleep, travel, anime, movies-series, reading"
 
 # Of those, the ones that are rest rather than something you chose to do.
 # Kept out of the main list so they do not dominate the percentages.
@@ -59,8 +59,7 @@ Names are lowercased and trimmed on read. An entry in `rest` that is not also in
 
 **A name may not contain `/`.** The report already reads `fun/Youtube` as the
 subcategory `Youtube` under `fun`, so an activity called `movies/series` would split
-into two. Use `movies` and `series`, or `movies-series`. This is why the example above
-says `movies` where the original list said "Movies/Series".
+into two rows. Movies and series are one activity, so the name is `movies-series`.
 
 **A name shared with a rule category merges into one row.** If `rules.toml` files a
 Kindle app as `reading` and `reading` is also a logged activity, the row is the sum of
@@ -201,7 +200,7 @@ noted: sleep   23:30-07:00  (7h 30m, crosses midnight)
 
 $ stalker note 18:00-19:00 wrkout
 unknown activity "wrkout". Declared activities are:
-  playing, workout, sleep, travel, anime, movies, reading
+  playing, workout, sleep, travel, anime, movies-series, reading
 Add it to activities in ~/.config/stalker/rules.toml
 ```
 
@@ -252,13 +251,9 @@ most of the tests.
 
 ## 11. Open items
 
-1. **Whether `series` deserves its own activity, separate from `movies`.** The
-   original list said "Movies/Series" as one item, and a name cannot contain `/`
-   (§3), so it is `movies` for now and covers both. Splitting it later is a one-line
-   config edit. Confirmed separately that `movies` and `anime` stay distinct.
-2. **Whether `unaccounted` should break down further.** Right now it is locked plus
+1. **Whether `unaccounted` should break down further.** Right now it is locked plus
    gap. Once sleep is logged nightly, what remains may turn out to be mostly dark
    wake, which is a collection problem rather than a reporting one.
-3. **Dark wake fragmentation.** Measured on 2026-10-01: the 01:00-08:00 window holds
+2. **Dark wake fragmentation.** Measured on 2026-10-01: the 01:00-08:00 window holds
    268 `gap` rows and 267 `locked` rows, one pair roughly every 47 seconds. Logging
    sleep hides this in the report without fixing it. Separate piece of work.
