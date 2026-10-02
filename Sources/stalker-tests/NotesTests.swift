@@ -296,3 +296,54 @@ import StalkerCore
     t.eq(after + (r7.claims.first?.claimed ?? 0), before,
          "trimmed recorded time plus claimed time equals what was there")
 }
+
+@MainActor func overlapAttributionTests(_ t: T) {
+    let day = Span(0, 86400)
+    // A seven-hour sleep with forty minutes of Slack inside it, which is the example
+    // the design uses. The report has to be able to say what held the time.
+    let ivs = [
+        mkInterval(0, 3600, kind: .gap, samples: 0, active: 0),
+        mkInterval(3600, 6000, bundle: "com.tinyspeck.slackmacgap", app: "Slack",
+                   ctx: "general", samples: 80, active: 40),
+        mkInterval(6000, 25200, kind: .gap, samples: 0, active: 0),
+    ]
+    let r = resolveNotes(intervals: ivs,
+                         notes: [Note(activity: "sleep", span: Span(0, 25200), line: 1)],
+                         range: day)
+    let claim = r.claims.first
+    t.eq(claim?.stated, 25200, "the note stated seven hours")
+    t.eq(claim?.claimed, 22800, "and claimed all but the forty minutes Slack held")
+    t.eq(claim?.heldBy["Slack"], 2400, "the app that held the time is named, with how long")
+    t.eq(claim?.heldBy.count, 1, "only apps that actually overlapped are listed")
+
+    // Two apps inside one note are both attributed.
+    let two = resolveNotes(
+        intervals: [
+            mkInterval(0, 600, bundle: "com.a", app: "Alpha", ctx: "/a", samples: 20, active: 20),
+            mkInterval(600, 1200, kind: .gap, samples: 0, active: 0),
+            mkInterval(1200, 1500, bundle: "com.b", app: "Beta", ctx: "/b", samples: 10, active: 10),
+        ],
+        notes: [Note(activity: "sleep", span: Span(0, 1500), line: 1)], range: day)
+    t.eq(two.claims.first?.heldBy["Alpha"], 600, "the first app is attributed")
+    t.eq(two.claims.first?.heldBy["Beta"], 300, "and so is the second")
+    t.eq(two.claims.first?.claimed, 600, "leaving only the gap between them")
+
+    // When nothing held any of it, there is nothing to attribute and no line to print.
+    let clean = resolveNotes(intervals: [mkInterval(0, 600, kind: .gap, samples: 0, active: 0)],
+                             notes: [Note(activity: "sleep", span: Span(0, 600), line: 1)],
+                             range: day)
+    t.eq(clean.claims.first?.heldBy.isEmpty, true, "a note that claimed everything attributes nothing")
+    t.eq(clean.claims.first?.stated, clean.claims.first?.claimed,
+         "and its stated and claimed figures agree")
+
+    // Time lost to an EARLIER NOTE is not blamed on an app. Different cause, and
+    // blaming an app would send the reader looking for activity that was not there.
+    let twoNotes = resolveNotes(
+        intervals: [mkInterval(0, 3600, kind: .gap, samples: 0, active: 0)],
+        notes: [Note(activity: "sleep", span: Span(0, 1800), line: 1),
+                Note(activity: "workout", span: Span(0, 3600), line: 2)],
+        range: day)
+    t.eq(twoNotes.claims.last?.claimed, 1800, "the second note gets what the first left")
+    t.eq(twoNotes.claims.last?.heldBy.isEmpty, true,
+         "and blames no app, because an earlier note took it")
+}

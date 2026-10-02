@@ -12,11 +12,18 @@ public struct NoteClaim: Equatable, Sendable {
     public let stated: Int
     /// Where it actually logged time.
     public let spans: [Span]
+    /// Apps that held time inside the stated range, and for how long each.
+    ///
+    /// Only apps. Time lost to an earlier note is deliberately absent: blaming an app
+    /// for it would send the reader looking for activity that was never there.
+    public let heldBy: [String: Int]
 
     public var claimed: Int { totalSeconds(spans) }
 
-    public init(activity: String, line: Int, stated: Int, spans: [Span]) {
+    public init(activity: String, line: Int, stated: Int, spans: [Span],
+                heldBy: [String: Int] = [:]) {
         self.activity = activity; self.line = line; self.stated = stated; self.spans = spans
+        self.heldBy = heldBy
     }
 }
 
@@ -63,7 +70,8 @@ public func resolveNotes(intervals: [Interval], notes: [Note], range: Span)
     -> (intervals: [Interval], claims: [NoteClaim]) {
 
     // Time an app held. This is what a note can never take.
-    let held = normalized(intervals.filter { $0.kind == .app }.map(span(of:)))
+    let appIntervals = intervals.filter { $0.kind == .app }
+    let held = normalized(appIntervals.map(span(of:)))
 
     var takenByNotes: [Span] = []
     var claims: [NoteClaim] = []
@@ -75,8 +83,20 @@ public func resolveNotes(intervals: [Interval], notes: [Note], range: Span)
         // rather than both counting it. File order decides, which is arbitrary but
         // deterministic, and the loser reports claiming less than it stated.
         let available = subtracting(inRange, normalized(held + takenByNotes))
+
+        // Which apps overlapped the stated range, so the report can name them. Measured
+        // per interval rather than from the merged `held` set, which has already lost
+        // track of who owned what.
+        var heldBy: [String: Int] = [:]
+        for iv in appIntervals {
+            let overlap = totalSeconds(intersecting(inRange, [span(of: iv)]))
+            guard overlap > 0 else { continue }
+            heldBy[iv.appName ?? "(unknown)", default: 0] += overlap
+        }
+
         claims.append(NoteClaim(activity: note.activity, line: note.line,
-                                stated: totalSeconds(inRange), spans: available))
+                                stated: totalSeconds(inRange), spans: available,
+                                heldBy: heldBy))
         takenByNotes = normalized(takenByNotes + available)
     }
 

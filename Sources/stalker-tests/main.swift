@@ -1228,6 +1228,7 @@ import StalkerMac
     activityConfigTests(t)
     notesFileTests(t)
     resolutionTests(t)
+    overlapAttributionTests(t)
 
     return t.summary()
 }
