@@ -1230,6 +1230,7 @@ import StalkerMac
     resolutionTests(t)
     overlapAttributionTests(t)
     dayViewWithNotesTests(t)
+    weekViewWithNotesTests(t)
 
     return t.summary()
 }

@@ -445,3 +445,56 @@ private let loggedRules = RuleSet(defaultCategory: "unclear", rules: [
     t.expect(plain.contains("TOTALS   tracked"), "with no notes the header is unchanged")
     t.expect(plain.contains("away  "), "and the away line is unchanged")
 }
+
+@MainActor func weekViewWithNotesTests(_ t: T) {
+    let utc = TimeZone(identifier: "UTC")!
+    let opts = RenderOptions(width: 100, color: false, home: "/Users/alex")
+    let mon = 1_790_553_600, tue = 1_790_640_000, wed = 1_790_726_400
+
+    let ivs = [
+        mkInterval(mon, mon + 36000, kind: .gap, samples: 0, active: 0),
+        mkInterval(mon + 36000, mon + 39600, bundle: "com.test.work", app: "Ghostty",
+                   ctx: "/a", samples: 120, active: 102),
+        mkInterval(mon + 39600, wed, kind: .gap, samples: 0, active: 0),
+    ]
+    // A night's sleep from 23:00 Monday to 07:00 Tuesday: one hour of it falls on
+    // Monday and seven on Tuesday.
+    let notes = [
+        Note(activity: "sleep", span: Span(mon + 82800, mon + 111600), line: 1),
+        Note(activity: "workout", span: Span(tue + 36000, tue + 37800), line: 2),
+    ]
+    let text = renderWeek(ivs, notes: notes, bucketSecs: 1800, rules: loggedRules,
+                          timeZone: utc, from: mon, to: wed, options: opts)
+
+    // --- a logged activity gets a column ---
+    let header = text.components(separatedBy: "\n").first { $0.contains("logged") || $0.contains("tracked") } ?? ""
+    t.expect(header.contains("workout"), "a logged activity is a column, got: \(header)")
+    t.expect(header.contains("work"), "and recorded categories still are")
+    // Rest is not a column. It would be the widest one every week and tell you nothing
+    // you did not already know.
+    t.expect(!header.contains("sleep"), "rest is not a column")
+    t.expect(text.contains("sleep  8h 00m"), "rest totals as a footer line instead")
+
+    // --- a note crossing midnight is split between the two days it touches ---
+    let rows = text.components(separatedBy: "\n")
+    let monRow = rows.first { $0.hasPrefix("  Mon 28") } ?? ""
+    let tueRow = rows.first { $0.hasPrefix("  Tue 29") } ?? ""
+    t.expect(monRow.contains("1h 00m"), "Monday shows its hour of recorded work, got: \(monRow)")
+    t.expect(tueRow.contains("30m"), "Tuesday shows its half hour of workout, got: \(tueRow)")
+
+    // --- the totals row is the sum of the day rows ---
+    // work 1h on Monday plus workout 30m on Tuesday, with sleep excluded.
+    let totalRow = rows.first { $0.contains("total") } ?? ""
+    t.expect(totalRow.contains("1h 30m"), "the week logged an hour and a half, got: \(totalRow)")
+
+    // --- what nothing explained ---
+    t.expect(text.contains("unaccounted"), "the week reports unaccounted time")
+    t.expect(!text.contains("away  "), "and not as away, since some of it now has a reason")
+
+    // --- a week with no notes renders exactly as before ---
+    let plain = renderWeek(ivs, bucketSecs: 1800, rules: loggedRules, timeZone: utc,
+                           from: mon, to: wed, options: opts)
+    t.expect(plain.contains("tracked"), "with no notes the column is still called tracked")
+    t.expect(plain.contains("away  "), "and the away line is unchanged")
+    t.expect(!plain.contains("sleep"), "with no notes there is no rest line")
+}

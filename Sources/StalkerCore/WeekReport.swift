@@ -81,45 +81,65 @@ private func dayLabel(_ ts: Int, _ tz: TimeZone) -> String {
 }
 
 /// One row per day, one column per category, for a range of days.
-public func renderWeek(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZone: TimeZone,
-                       from: Int, to: Int, options: RenderOptions = RenderOptions()) -> String {
+public func renderWeek(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, rules: RuleSet,
+                       timeZone: TimeZone, from: Int, to: Int,
+                       options: RenderOptions = RenderOptions()) -> String {
     let days = dayStarts(from: from, to: to, timeZone: timeZone)
     let lastDay = days.last ?? from
     var lines = [dayHeading(from, timeZone) + " ─ " + dayHeading(lastDay, timeZone), ""]
 
-    // Totals for the whole range decide which categories earn a column, so the columns
-    // are the same on every row.
-    let weekSlices = slice(ivs, bucketSecs: bucketSecs, rules: rules, from: from, to: to)
-    guard !weekSlices.isEmpty else {
+    /// Category totals for one day, with notes resolved against that day's window.
+    ///
+    /// Per day rather than per week, so a note crossing midnight contributes to each day
+    /// the part that actually falls in it.
+    func catsFor(_ dayFrom: Int, _ dayTo: Int) -> [CategoryTotal] {
+        let r = resolveNotes(intervals: ivs, notes: notes, range: Span(dayFrom, dayTo))
+        return totals(slice(r.intervals, bucketSecs: bucketSecs, rules: rules,
+                            from: dayFrom, to: dayTo)
+                      + noteSlices(r.claims, bucketSecs: bucketSecs))
+    }
+
+    var dayCats: [(label: String, cats: [CategoryTotal])] = []
+    for (i, dayFrom) in days.enumerated() {
+        let dayTo = i + 1 < days.count ? days[i + 1] : to
+        dayCats.append((dayLabel(dayFrom, timeZone), catsFor(dayFrom, dayTo)))
+    }
+
+    // Summed from the days rather than recomputed over the range, so the total row is
+    // the sum of the rows above it by construction and cannot drift from them.
+    var weekSeconds: [String: Int] = [:]
+    for d in dayCats { for c in d.cats { weekSeconds[c.category, default: 0] += c.seconds } }
+    guard !weekSeconds.isEmpty else {
         lines.append("no activity recorded")
         return lines.joined(separator: "\n")
     }
-    let weekTotals = totals(weekSlices)
-    let ranked = weekTotals.filter { !awayCategories.contains($0.category) }
-    let named = ranked.prefix(weekColumnLimit).map(\.category)
+
+    // Rest is excluded from the table as well as from the total: it would be the widest
+    // column every week and say nothing you did not already know.
+    func inList(_ c: String) -> Bool { !awayCategories.contains(c) && !rules.rest.contains(c) }
+    let hasLogged = rules.activities.contains { (weekSeconds[$0] ?? 0) > 0 }
+
+    let ranked = weekSeconds.filter { inList($0.key) }
+        .sorted { ($0.value, $1.key) > ($1.value, $0.key) }
+    let named = ranked.prefix(weekColumnLimit).map(\.key)
     let hasOther = ranked.count > weekColumnLimit
-    let columns = named + (hasOther ? ["other"] : []) + ["tracked"]
+    let columns = named + (hasOther ? ["other"] : []) + [hasLogged ? "logged" : "tracked"]
 
     /// Seconds per column for one day, in `columns` order.
-    func cells(_ dayFrom: Int, _ dayTo: Int) -> [Int] {
-        let cats = totals(slice(ivs, bucketSecs: bucketSecs, rules: rules, from: dayFrom, to: dayTo))
+    func cells(_ cats: [CategoryTotal]) -> [Int] {
         let byName = Dictionary(uniqueKeysWithValues:
-            cats.filter { !awayCategories.contains($0.category) }.map { ($0.category, $0.seconds) })
+            cats.filter { inList($0.category) }.map { ($0.category, $0.seconds) })
         var row = named.map { byName[$0] ?? 0 }
         if hasOther {
-            let tail = byName.filter { !named.contains($0.key) }.values.reduce(0, +)
-            row.append(tail)
+            row.append(byName.filter { !named.contains($0.key) }.values.reduce(0, +))
         }
         row.append(byName.values.reduce(0, +))
         return row
     }
 
-    var rows: [(label: String, cells: [Int])] = []
-    for (i, dayFrom) in days.enumerated() {
-        let dayTo = i + 1 < days.count ? days[i + 1] : to
-        rows.append((dayLabel(dayFrom, timeZone), cells(dayFrom, dayTo)))
-    }
-    let totalCells = cells(from, to)
+    let rows = dayCats.map { (label: $0.label, cells: cells($0.cats)) }
+    var totalCells = Array(repeating: 0, count: columns.count)
+    for r in rows { for (i, v) in r.cells.enumerated() { totalCells[i] += v } }
 
     // A blank cell rather than "0m": the eye should land on the days that happened.
     func cellText(_ seconds: Int) -> String { seconds >= 60 ? formatDuration(seconds) : "" }
@@ -166,16 +186,26 @@ public func renderWeek(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZ
     shares.append("")
     lines.append(row("", Array(shares)))
 
+    // Rest, below the table rather than inside it.
+    let restNames = rules.rest.filter { (weekSeconds[$0] ?? 0) >= 60 }.sorted()
+    if !restNames.isEmpty {
+        lines.append("")
+        for name in restNames {
+            lines.append("\(name)  \(formatDuration(weekSeconds[name] ?? 0))")
+        }
+    }
+
     // Away time, kept out of the table but not out of the report: without it a week
     // asleep and a week with a dead sampler look identical.
-    let locked = weekTotals.first { $0.category == Kind.locked.rawValue }?.seconds ?? 0
-    let gap = weekTotals.first { $0.category == Kind.gap.rawValue }?.seconds ?? 0
+    let locked = weekSeconds[Kind.locked.rawValue] ?? 0
+    let gap = weekSeconds[Kind.gap.rawValue] ?? 0
     if locked + gap > 0 {
         var parts: [String] = []
         if locked > 0 { parts.append("locked \(formatDuration(locked))") }
         if gap > 0 { parts.append("no data \(formatDuration(gap))") }
-        lines.append("")
-        lines.append("away  \(formatDuration(locked + gap))   " + parts.joined(separator: " · "))
+        if restNames.isEmpty { lines.append("") }
+        lines.append("\(hasLogged ? "unaccounted" : "away")  \(formatDuration(locked + gap))   "
+                     + parts.joined(separator: " · "))
     }
 
     return lines.joined(separator: "\n")
