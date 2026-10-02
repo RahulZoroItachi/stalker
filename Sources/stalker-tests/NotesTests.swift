@@ -124,3 +124,73 @@ import StalkerCore
     """, homeDirectory: "/Users/alex")
     t.expect(inRule == nil, "activities inside a [[rule]] is refused")
 }
+
+@MainActor func notesFileTests(_ t: T) {
+    let utc = TimeZone(identifier: "UTC")!
+    let declared = Set(["sleep", "travel", "workout"])
+    // 2026-10-01 00:00 UTC
+    let oct1 = 1_790_812_800
+
+    func parse(_ text: String) -> [Note]? {
+        try? parseNotes(text, activities: declared, timeZone: utc)
+    }
+
+    // --- the ordinary line ---
+    let one = parse("2026-10-01  01:00-08:00  sleep")
+    t.eq(one?.count, 1, "one line yields one note")
+    t.eq(one?.first?.activity, "sleep", "the activity is read")
+    t.eq(one?.first?.span, Span(oct1 + 3600, oct1 + 28800), "the span is absolute unix seconds")
+    t.eq(one?.first?.line, 1, "the line number is kept, for error messages")
+
+    // --- comments, blanks, and loose whitespace ---
+    let messy = parse("""
+    # a comment
+    2026-10-01   01:00-08:00   sleep
+
+      2026-10-01  08:30-09:00  travel   # trailing comment
+    """)
+    t.eq(messy?.count, 2, "comments and blank lines are skipped, indentation ignored")
+    t.eq(messy?.last?.activity, "travel", "the second line is read")
+    t.eq(messy?.last?.span, Span(oct1 + 30600, oct1 + 32400), "08:30-09:00 is half an hour")
+
+    // --- crossing midnight ---
+    // Sleep normally crosses midnight, so this is the common case, not an edge case.
+    let night = parse("2026-09-30  23:30-07:00  sleep")
+    t.eq(night?.first?.span.seconds, 27000, "23:30-07:00 is 7h 30m, ending the next day")
+    t.eq(night?.first?.span.end, oct1 + 25200, "and it ends at 07:00 on the following day")
+
+    // --- an activity is matched case-insensitively against the declared list ---
+    t.eq(parse("2026-10-01  01:00-02:00  SLEEP")?.first?.activity, "sleep",
+         "the activity is lowercased to match the declared list")
+
+    // --- the mistakes worth refusing ---
+    func rejects(_ text: String, _ name: String) {
+        t.expect((try? parseNotes(text, activities: declared, timeZone: utc)) == nil, name)
+    }
+    rejects("2026-10-01  01:00-08:00", "a line missing the activity is refused")
+    rejects("2026-10-01  01:00-08:00  sleep  extra", "a line with a fourth field is refused")
+    rejects("2026-10-01  sleep", "a line missing the range is refused")
+    rejects("2026-13-01  01:00-08:00  sleep", "an impossible month is refused")
+    rejects("2026-02-30  01:00-08:00  sleep", "a date that does not exist is refused")
+    rejects("01-10-2026  01:00-08:00  sleep", "a non-ISO date is refused")
+    rejects("2026-10-01  0100-0800  sleep", "a range without a colon is refused")
+    rejects("2026-10-01  25:00-26:00  sleep", "an hour beyond 23 is refused")
+    rejects("2026-10-01  01:60-02:00  sleep", "a minute beyond 59 is refused")
+    rejects("2026-10-01  01:00-08:00  napping", "an undeclared activity is refused")
+    // A zero-length block logs nothing, so it is a mistake rather than a no-op. Left
+    // in the file it would read as a block that mysteriously claims no time.
+    rejects("2026-10-01  08:00-08:00  sleep", "a zero-length range is refused")
+
+    // --- an empty file is not an error ---
+    t.eq(parse(""), [], "an empty notes file yields no notes")
+    t.eq(parse("# only a comment\n"), [], "a file of only comments yields no notes")
+
+    // --- the line a command appends round-trips through the parser ---
+    // The writer and the reader must agree, or `stalker note` could append a line that
+    // the next report refuses to read.
+    let line = noteLine(date: "2026-10-02", from: "01:30", to: "08:30", activity: "sleep")
+    t.eq(line, "2026-10-02  01:30-08:30  sleep", "the appended line has the documented shape")
+    let round = parse(line)
+    t.eq(round?.count, 1, "the line it writes is a line it can read")
+    t.eq(round?.first?.span.seconds, 25200, "and it means the seven hours intended")
+}

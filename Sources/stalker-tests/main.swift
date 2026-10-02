@@ -1226,6 +1226,7 @@ import StalkerMac
     idleCountsTests(t)
     spanTests(t)
     activityConfigTests(t)
+    notesFileTests(t)
 
     return t.summary()
 }
