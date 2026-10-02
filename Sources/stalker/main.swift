@@ -89,8 +89,13 @@ func runReport(_ req: ReportRequest) -> Int32 {
         }
 
         let ivs = try store.intervals(from: range.from, to: range.to)
-        let render = week ? renderWeek : renderDay
-        print(render(ivs, bucketSeconds, rules, tz, range.from, range.to, options))
+        if week {
+            print(renderWeek(ivs, bucketSecs: bucketSeconds, rules: rules, timeZone: tz,
+                             from: range.from, to: range.to, options: options))
+        } else {
+            print(renderDay(ivs, bucketSecs: bucketSeconds, rules: rules, timeZone: tz,
+                            from: range.from, to: range.to, options: options))
+        }
         return 0
     } catch {
         FileHandle.standardError.write("report failed: \(error)\n".data(using: .utf8)!)

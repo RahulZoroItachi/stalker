@@ -347,3 +347,101 @@ import StalkerCore
     t.eq(twoNotes.claims.last?.heldBy.isEmpty, true,
          "and blames no app, because an earlier note took it")
 }
+
+private let loggedRules = RuleSet(defaultCategory: "unclear", rules: [
+    Rule(app: "com.test.work", appName: nil, context: nil, category: "work"),
+], activities: ["sleep", "workout", "travel"], rest: Set(["sleep"]))
+
+@MainActor func dayViewWithNotesTests(_ t: T) {
+    let utc = TimeZone(identifier: "UTC")!
+    let opts = RenderOptions(width: 100, color: false, home: "/Users/alex")
+    let ivs = [
+        mkInterval(0, 7200, kind: .gap, samples: 0, active: 0),
+        mkInterval(7200, 9000, bundle: "com.test.work", app: "Ghostty",
+                   ctx: "/Users/alex/Work/Proj", samples: 60, active: 51),
+        mkInterval(9000, 12600, kind: .locked, samples: 120, active: 0),
+    ]
+    let notes = [
+        Note(activity: "sleep", span: Span(0, 5400), line: 1),
+        Note(activity: "workout", span: Span(10800, 12600), line: 2),
+    ]
+    let text = renderDay(ivs, notes: notes, bucketSecs: 1800, rules: loggedRules,
+                         timeZone: utc, from: 0, to: 86400, options: opts)
+
+    // --- a logged activity is a row in the list, like any category ---
+    t.expect(text.contains("workout"), "a logged activity appears in the list")
+    // No input was recorded for it, so no active share is claimed.
+    let workoutRow = text.components(separatedBy: "\n").first { $0.hasPrefix("  workout") } ?? ""
+    t.expect(!workoutRow.contains("active"), "a logged activity reports no active share")
+    t.expect(workoutRow.contains("50%"), "but it does get a percentage, got: \(workoutRow)")
+
+    // --- rest is kept out of the list and printed below it ---
+    // Ninety minutes of sleep against an hour of everything else would otherwise take
+    // most of the bar and halve every real percentage.
+    t.expect(!text.components(separatedBy: "\n").contains { $0.hasPrefix("  sleep ") },
+             "a rest activity is not a row in the list")
+    t.expect(text.contains("\nsleep  1h 30m"), "a rest activity prints below the list")
+    t.expect(text.contains("logged 1h 00m") || text.contains("1h 00m logged"),
+             "the logged total excludes rest")
+
+    // --- unaccounted replaces away, and shrinks by what was claimed ---
+    // gap was 2h and locked 1h; the notes took 1h30m of gap and 30m of locked.
+    t.expect(text.contains("unaccounted  1h 00m"), "unaccounted is what no note explained")
+    t.expect(!text.contains("away  "), "the away line is gone, replaced by unaccounted")
+    t.expect(text.contains("locked 30m"), "locked and no data stay distinguishable")
+    t.expect(text.contains("no data 30m"), "so a dead sampler is still detectable")
+
+    // --- the timeline names the activity instead of saying no data ---
+    let rows = text.components(separatedBy: "\n").filter { $0.contains("─") }
+    t.expect(rows.contains { $0.hasPrefix("00:00 ─ 01:30") && $0.contains("sleep") },
+             "the sleep block is one row spanning its whole run")
+    t.eq(rows.filter { $0.contains("sleep") }.count, 1,
+         "three consecutive half-hours of sleep collapse to one row")
+    // A logged activity has no app and no context, so it prints as a bare label the way
+    // locked does, rather than padding out columns with dashes.
+    let sleepRow = rows.first { $0.contains("sleep") } ?? ""
+    t.expect(!sleepRow.contains("—"), "a logged row prints no placeholder app or context")
+    t.expect(rows.contains { $0.hasPrefix("01:30 ─ 02:00") && $0.contains("no data") },
+             "the gap the note did not cover is still reported")
+
+    // --- the shortfall line ---
+    // A note that claimed less than it stated must say so, or it reads as lost time.
+    let clash = renderDay(
+        [mkInterval(0, 1800, kind: .gap, samples: 0, active: 0),
+         mkInterval(1800, 3600, bundle: "com.test.work", app: "Ghostty", ctx: "/a",
+                    samples: 60, active: 60)],
+        notes: [Note(activity: "workout", span: Span(0, 3600), line: 1)],
+        bucketSecs: 1800, rules: loggedRules, timeZone: utc, from: 0, to: 86400, options: opts)
+    t.expect(clash.contains("notes"), "a shortfall gets its own section")
+    t.expect(clash.contains("claimed 30m of 1h 00m"), "stating both figures, got:\n\(clash)")
+    t.expect(clash.contains("Ghostty"), "and naming what held the rest")
+    // When a note claimed everything it stated, there is nothing to report.
+    t.expect(!text.contains("claimed"), "a note that got what it asked for prints no note line")
+
+    // --- exact layout, as a guard against drift ---
+    let expected = [
+        "Thu 1 Jan 1970",
+        "",
+        "00:00 ─ 01:30   sleep",
+        "01:30 ─ 02:00   no data",
+        "02:00 ─ 02:30   work         Ghostty        ~/Work/Proj",
+        "02:30 ─ 03:00   locked",
+        "03:00 ─ 03:30   workout",
+        "",
+        "YOUR DAY   1h 00m logged",
+        "  work         ██████████░░░░░░░░░░      30m   50%   active 85%",
+        "  workout      ██████████░░░░░░░░░░      30m   50%",
+        "",
+        "sleep  1h 30m",
+        "unaccounted  1h 00m   locked 30m · no data 30m",
+    ].joined(separator: "\n")
+    t.eq(text, expected, "the rendered day matches the agreed layout exactly")
+
+    // --- a day with no notes is unchanged from before this feature ---
+    // The old header and away line are what every existing test asserts, so passing no
+    // notes must still produce them.
+    let plain = renderDay(ivs, bucketSecs: 1800, rules: loggedRules, timeZone: utc,
+                          from: 0, to: 86400, options: opts)
+    t.expect(plain.contains("TOTALS   tracked"), "with no notes the header is unchanged")
+    t.expect(plain.contains("away  "), "and the away line is unchanged")
+}

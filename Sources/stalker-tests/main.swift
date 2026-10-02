@@ -1229,6 +1229,7 @@ import StalkerMac
     notesFileTests(t)
     resolutionTests(t)
     overlapAttributionTests(t)
+    dayViewWithNotesTests(t)
 
     return t.summary()
 }

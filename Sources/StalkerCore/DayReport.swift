@@ -21,6 +21,14 @@ public struct RenderOptions: Sendable {
 /// minutes of actual work sat below it.
 let awayCategories: Set<String> = [Kind.gap.rawValue, Kind.locked.rawValue]
 
+/// Categories with no app behind them: time away, and activities logged by hand.
+///
+/// Both render as a bare label rather than padding out an app and context column with
+/// dashes, and runs of both collapse into one row.
+func isLabelOnly(_ category: String, _ rules: RuleSet) -> Bool {
+    awayCategories.contains(category) || rules.activities.contains(category)
+}
+
 /// `gap` is the schema's word for it. "no data" is what it means to a reader.
 func displayCategory(_ category: String) -> String {
     category == Kind.gap.rawValue ? "no data" : category
@@ -88,7 +96,7 @@ private struct Row {
 /// whole point of the report is a 30-minute-by-30-minute account, and collapsing
 /// `work` into one long row would throw that away. Merging the away runs is what
 /// turns eighteen identical overnight rows into one.
-private func timelineRows(_ slices: [Slice], bucketSecs: Int) -> [Row] {
+private func timelineRows(_ slices: [Slice], bucketSecs: Int, rules: RuleSet) -> [Row] {
     var rows: [Row] = []
     for bucket in Set(slices.map(\.bucketStart)).sorted() {
         let here = slices.filter { $0.bucketStart == bucket }
@@ -109,7 +117,7 @@ private func timelineRows(_ slices: [Slice], bucketSecs: Int) -> [Row] {
         // gap and locked stay separate runs. They are different states, and the footer
         // reports them separately for the same reason: merging them would hide a dead
         // sampler behind a night's sleep.
-        if awayCategories.contains(winner), var last = rows.last,
+        if isLabelOnly(winner, rules), var last = rows.last,
            last.category == winner, last.end == bucket {
             last.end = row.end
             rows[rows.count - 1] = last
@@ -120,9 +128,18 @@ private func timelineRows(_ slices: [Slice], bucketSecs: Int) -> [Row] {
     return rows
 }
 
-public func renderDay(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZone: TimeZone,
-                      from: Int, to: Int, options: RenderOptions = RenderOptions()) -> String {
-    let all = slice(ivs, bucketSecs: bucketSecs, rules: rules, from: from, to: to)
+public func renderDay(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, rules: RuleSet,
+                      timeZone: TimeZone, from: Int, to: Int,
+                      options: RenderOptions = RenderOptions()) -> String {
+    // Notes claim only what no app held, so resolution happens before slicing: the
+    // recorded intervals come back trimmed to the time no note explained, and the
+    // claims become slices of their own.
+    let resolved = resolveNotes(intervals: ivs, notes: notes, range: Span(from, to))
+    let all = slice(resolved.intervals, bucketSecs: bucketSecs, rules: rules, from: from, to: to)
+             + noteSlices(resolved.claims, bucketSecs: bucketSecs)
+    // Whether anything was actually logged by hand decides the wording below. A note
+    // for another day leaves this day exactly as it was, so it must not change it.
+    let hasLogged = resolved.claims.contains { $0.claimed > 0 }
     var lines = [dayHeading(from, timeZone), ""]
 
     guard !all.isEmpty else {
@@ -143,9 +160,9 @@ public func renderDay(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZo
     // apps most often in focus, and "Goog…hrome" is not a readable app name.
     let timeCol = 13, catCol = 13, appCol = 15, shareCol = 7
     let labelWidth = max(8, options.width - timeCol - 3 - catCol - appCol - shareCol)
-    for row in timelineRows(all, bucketSecs: bucketSecs) {
+    for row in timelineRows(all, bucketSecs: bucketSecs, rules: rules) {
         let span = "\(clockTime(row.start, timeZone)) ─ \(clockTime(row.end, timeZone))   "
-        if awayCategories.contains(row.category) {
+        if isLabelOnly(row.category, rules) {
             lines.append(span + paint(displayCategory(row.category), row.category))
             continue
         }
@@ -156,8 +173,11 @@ public func renderDay(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZo
     }
 
     // --- totals ---
-    let tracked = cats.filter { !awayCategories.contains($0.category) }
-                      .reduce(0) { $0 + $1.seconds }
+    // Rest is excluded from the denominator as well as from the list. Seven hours of
+    // sleep in the same divisor would make every other row a rounding error, which is
+    // the whole reason it sits apart.
+    func inList(_ c: String) -> Bool { !awayCategories.contains(c) && !rules.rest.contains(c) }
+    let tracked = cats.filter { inList($0.category) }.reduce(0) { $0 + $1.seconds }
 
     /// Rows that round to `0m` tell the reader nothing and crowd out rows that do.
     func worthShowing(_ seconds: Int) -> Bool { seconds >= 60 }
@@ -196,7 +216,7 @@ public func renderDay(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZo
     if tracked > 0 {
         // A category below a minute is dropped, but stays inside `tracked`, so the
         // percentages still describe the whole day rather than only what is printed.
-        let shown = cats.filter { !awayCategories.contains($0.category) && worthShowing($0.seconds) }
+        let shown = cats.filter { inList($0.category) && worthShowing($0.seconds) }
 
         /// Shorten each label to what the width allows, then find where the duration
         /// column has to sit. Right-aligning at the terminal edge instead strands every
@@ -214,7 +234,10 @@ public func renderDay(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZo
         }
 
         lines.append("")
-        lines.append("TOTALS   tracked \(formatDuration(tracked))")
+        // "tracked" means time at the machine, which is no longer the whole story once
+        // off-screen activities are logged. The word changes with the meaning.
+        lines.append(hasLogged ? "YOUR DAY   \(formatDuration(tracked)) logged"
+                               : "TOTALS   tracked \(formatDuration(tracked))")
         for ct in shown {
             var line = "  " + paint(column(ct.category, catCol), ct.category)
                        + paint(bar(Double(ct.seconds) / Double(tracked), width: 20), ct.category)
@@ -238,15 +261,44 @@ public func renderDay(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet, timeZo
         }
     }
 
-    // --- away footer ---
+    // --- rest, below the list rather than inside it ---
+    let restRows = cats.filter { rules.rest.contains($0.category) && worthShowing($0.seconds) }
+    if !restRows.isEmpty {
+        lines.append("")
+        for ct in restRows { lines.append("\(ct.category)  \(formatDuration(ct.seconds))") }
+    }
+
+    // --- what nothing explained ---
     let locked = cats.first { $0.category == Kind.locked.rawValue }?.seconds ?? 0
     let gap = cats.first { $0.category == Kind.gap.rawValue }?.seconds ?? 0
     if locked + gap > 0 {
         var parts: [String] = []
         if locked > 0 { parts.append("locked \(formatDuration(locked))") }
         if gap > 0 { parts.append("no data \(formatDuration(gap))") }
+        // Once some away time has a reason, "away" is the wrong word for what is left.
+        let label = hasLogged ? "unaccounted" : "away"
+        if restRows.isEmpty { lines.append("") }
+        lines.append("\(label)  \(formatDuration(locked + gap))   " + parts.joined(separator: " · "))
+    }
+
+    // --- notes that logged less than they stated ---
+    // Silence here would read as a tracker that lost time.
+    let byLine = Dictionary(notes.map { ($0.line, $0) }, uniquingKeysWith: { a, _ in a })
+    let short = resolved.claims.filter { $0.claimed < $0.stated }
+    if !short.isEmpty {
         lines.append("")
-        lines.append("away  \(formatDuration(locked + gap))   " + parts.joined(separator: " · "))
+        lines.append("notes")
+        for claim in short {
+            var line = "  \(claim.activity)"
+            if let note = byLine[claim.line] {
+                line += " \(clockTime(note.span.start, timeZone))-\(clockTime(note.span.end, timeZone))"
+            }
+            line += " claimed \(formatDuration(claim.claimed)) of \(formatDuration(claim.stated))"
+            let blame = claim.heldBy.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
+                .prefix(3).map { "\(formatDuration($0.value)) held by \($0.key)" }
+            if !blame.isEmpty { line += " — " + blame.joined(separator: ", ") }
+            lines.append(line)
+        }
     }
 
     return lines.joined(separator: "\n")
