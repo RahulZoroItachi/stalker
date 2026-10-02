@@ -1224,6 +1224,7 @@ import StalkerMac
     widthAndColorTests(t)
     reportArgsTests(t)
     idleCountsTests(t)
+    spanTests(t)
 
     return t.summary()
 }
