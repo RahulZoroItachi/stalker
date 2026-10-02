@@ -1227,6 +1227,7 @@ import StalkerMac
     spanTests(t)
     activityConfigTests(t)
     notesFileTests(t)
+    resolutionTests(t)
 
     return t.summary()
 }

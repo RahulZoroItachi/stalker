@@ -25,7 +25,9 @@ public func overlapSeconds(_ iv: Interval, bucketStart: Int, bucketEnd: Int) -> 
 public struct Slice: Equatable, Sendable {
     public let bucketStart: Int
     public let category: String
-    public let kind: Kind
+    /// The recorded kind this came from, or nil when the slice was logged by hand.
+    /// Logged time has no measured kind: nothing observed it.
+    public let kind: Kind?
     public let appName: String?
     public let context: String?
     public let seconds: Int

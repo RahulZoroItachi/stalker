@@ -194,3 +194,105 @@ import StalkerCore
     t.eq(round?.count, 1, "the line it writes is a line it can read")
     t.eq(round?.first?.span.seconds, 25200, "and it means the seven hours intended")
 }
+
+@MainActor func resolutionTests(_ t: T) {
+    let rules = RuleSet(defaultCategory: "unclear", rules: [
+        Rule(app: "com.test.work", appName: nil, context: nil, category: "work"),
+    ], activities: ["sleep", "workout"], rest: Set(["sleep"]))
+    let day = Span(0, 86400)
+
+    func note(_ from: Int, _ to: Int, _ activity: String, line: Int = 1) -> Note {
+        Note(activity: activity, span: Span(from, to), line: line)
+    }
+
+    // --- a note over time nothing recorded claims all of it ---
+    let gapOnly = [mkInterval(0, 3600, kind: .gap, samples: 0, active: 0)]
+    let r1 = resolveNotes(intervals: gapOnly, notes: [note(0, 3600, "sleep")], range: day)
+    t.eq(r1.claims.count, 1, "the note produces a claim")
+    t.eq(r1.claims.first?.stated, 3600, "it stated an hour")
+    t.eq(r1.claims.first?.claimed, 3600, "and claimed the whole hour")
+    t.eq(r1.intervals.filter { $0.kind == .gap }.count, 0, "the gap it covered is gone")
+
+    // --- app time is never claimable ---
+    let appOnly = [mkInterval(0, 3600, bundle: "com.test.work", app: "Ghostty", ctx: "/a",
+                              samples: 120, active: 120)]
+    let r2 = resolveNotes(intervals: appOnly, notes: [note(0, 3600, "sleep")], range: day)
+    t.eq(r2.claims.first?.stated, 3600, "the note still states an hour")
+    t.eq(r2.claims.first?.claimed, 0, "but claims none of it, because an app had focus")
+    t.eq(r2.intervals.count, 1, "the recorded interval survives untouched")
+    t.eq(r2.intervals.first?.endedAt, 3600, "at its full length")
+
+    // --- the case the rule exists for: a 30-minute block with 2 minutes recorded ---
+    // 28 minutes of workout, interrupted by 2 minutes of real app use in the middle.
+    let interrupted = [
+        mkInterval(0, 840, kind: .idle, samples: 28, active: 0),
+        mkInterval(840, 960, bundle: "com.test.work", app: "Ghostty", ctx: "/a",
+                   samples: 4, active: 4),
+        mkInterval(960, 1800, kind: .idle, samples: 28, active: 0),
+    ]
+    let r3 = resolveNotes(intervals: interrupted, notes: [note(0, 1800, "workout")], range: day)
+    t.eq(r3.claims.first?.stated, 1800, "the note stated thirty minutes")
+    t.eq(r3.claims.first?.claimed, 1680, "and claimed twenty-eight, the part nothing held")
+    t.eq(r3.claims.first?.spans.count, 2,
+         "claimed on both sides of the interruption, not truncated at it")
+    t.eq(r3.intervals.filter { $0.kind == .idle }.count, 0, "both idle stretches are consumed")
+    t.eq(r3.intervals.filter { $0.kind == .app }.count, 1, "the recorded two minutes remain")
+
+    // --- idle and locked are claimable, in the user's words ---
+    for kind in [Kind.idle, Kind.locked, Kind.gap] {
+        let ivs = [mkInterval(0, 600, kind: kind, samples: 20, active: 0)]
+        let r = resolveNotes(intervals: ivs, notes: [note(0, 600, "sleep")], range: day)
+        t.eq(r.claims.first?.claimed, 600, "\(kind.rawValue) time is claimable")
+    }
+
+    // --- two notes over the same time: the first in file order wins ---
+    // Arbitrary but deterministic, and the second reports claiming less than it stated
+    // so the overlap is visible rather than silent.
+    let r4 = resolveNotes(intervals: [mkInterval(0, 3600, kind: .gap, samples: 0, active: 0)],
+                          notes: [note(0, 1800, "sleep", line: 1),
+                                  note(0, 3600, "workout", line: 2)],
+                          range: day)
+    t.eq(r4.claims.first?.claimed, 1800, "the first note claims its half hour")
+    t.eq(r4.claims.last?.stated, 3600, "the second stated an hour")
+    t.eq(r4.claims.last?.claimed, 1800, "but got only the half the first left")
+
+    // --- a note outside the reported range is ignored ---
+    let r5 = resolveNotes(intervals: gapOnly, notes: [note(90000, 93600, "sleep")], range: day)
+    t.eq(r5.claims.count, 0, "a note for another day produces no claim here")
+
+    // --- a note crossing the range boundary is clipped to it ---
+    // This is how one night's sleep contributes to two days without being counted twice.
+    let crossing = [mkInterval(0, 7200, kind: .gap, samples: 0, active: 0)]
+    let r6 = resolveNotes(intervals: crossing, notes: [note(-3600, 3600, "sleep")], range: day)
+    t.eq(r6.claims.first?.stated, 3600, "only the part inside the day is stated")
+    t.eq(r6.claims.first?.claimed, 3600, "and only that part is claimed")
+
+    // --- note slices cut at bucket boundaries and preserve the total ---
+    let slices = noteSlices(r1.claims, bucketSecs: 1800)
+    t.eq(slices.reduce(0) { $0 + $1.seconds }, 3600, "the slices preserve the claimed duration")
+    t.eq(slices.count, 2, "an hour spans two half-hour buckets")
+    t.expect(slices.allSatisfy { $0.category == "sleep" }, "each carries the activity as its category")
+    // No input was recorded, so no active share can be claimed for it.
+    t.expect(slices.allSatisfy { $0.activeSeconds == 0 }, "logged time reports no active seconds")
+    t.expect(slices.allSatisfy { $0.kind == nil },
+             "a logged slice has no recorded kind, which is how it is told from a measured one")
+
+    // --- the invariant: no second is lost or counted twice ---
+    // Whatever the notes claim must come out of the recorded totals exactly, or the day
+    // would silently stop adding up.
+    let busy = [
+        mkInterval(0, 1800, kind: .gap, samples: 0, active: 0),
+        mkInterval(1800, 3600, kind: .locked, samples: 60, active: 0),
+        mkInterval(3600, 5400, bundle: "com.test.work", app: "Ghostty", ctx: "/a",
+                   samples: 60, active: 45),
+        mkInterval(5400, 7200, kind: .idle, samples: 60, active: 0),
+    ]
+    let before = totalSeconds(busy.map { Span($0.startedAt, $0.endedAt) })
+    let r7 = resolveNotes(intervals: busy,
+                          notes: [note(0, 7200, "sleep")], range: day)
+    let after = totalSeconds(r7.intervals.map { Span($0.startedAt, $0.endedAt) })
+    t.eq(before, 7200, "the day held two hours to begin with")
+    t.eq(r7.claims.first?.claimed, 5400, "the note claimed the ninety minutes no app held")
+    t.eq(after + (r7.claims.first?.claimed ?? 0), before,
+         "trimmed recorded time plus claimed time equals what was there")
+}
