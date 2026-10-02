@@ -62,3 +62,65 @@ import StalkerCore
     t.eq(clipped([Span(50, 150)], to: Span(100, 200)), [Span(100, 150)],
          "the second day gets the part after it")
 }
+
+@MainActor func activityConfigTests(_ t: T) {
+    func parse(_ extra: String) -> RuleSet? {
+        try? parseRules("""
+        default = "unclear"
+        \(extra)
+
+        [[rule]]
+        app = "com.test.a"
+        category = "work"
+        """, homeDirectory: "/Users/alex")
+    }
+
+    // --- the declared list ---
+    let rs = parse("""
+    activities = "playing, workout, sleep, travel, anime, movies-series, reading"
+    rest = "sleep"
+    """)
+    t.expect(rs != nil, "a rules file with activities parses")
+    t.eq(rs?.activities.count, 7, "all seven activities are read")
+    t.eq(rs?.activities.first, "playing", "declared order is preserved for error messages")
+    t.eq(rs?.activities.contains("movies-series"), true, "a hyphenated name survives intact")
+    t.eq(rs?.rest, Set(["sleep"]), "rest names the activities that are rest")
+
+    // Trimmed and lowercased, so "Workout" and " workout " are the same activity and a
+    // note typed either way matches.
+    let cased = parse("activities = \"  Workout , SLEEP \"\nrest = \"Sleep\"")
+    t.eq(cased?.activities, ["workout", "sleep"], "names are trimmed and lowercased")
+    t.eq(cased?.rest, Set(["sleep"]), "rest is lowercased to match")
+
+    // --- absent keys are fine; most rule files will never declare an activity ---
+    let none = parse("")
+    t.eq(none?.activities, [], "activities defaults to empty")
+    t.eq(none?.rest, Set([]), "rest defaults to empty")
+
+    // --- the mistakes worth refusing ---
+    func rejects(_ extra: String, _ name: String) {
+        t.expect(parse(extra) == nil, name)
+    }
+    // A rest entry that is not a declared activity is certainly a typo, and silently
+    // ignoring it would quietly put sleep back into the percentages.
+    rejects("activities = \"workout\"\nrest = \"sleep\"",
+            "a rest entry that is not a declared activity is refused")
+    // A slash would be read as a subcategory, the way work/Meeting puts Meeting inside
+    // work, so the one activity would split into two rows.
+    rejects("activities = \"movies/series\"",
+            "an activity name containing a slash is refused")
+    rejects("activities = \"workout, , sleep\"", "an empty activity name is refused")
+    rejects("activities = \"workout, workout\"", "a duplicated activity is refused")
+    rejects("rest = \"sleep\"", "rest without any activities declared is refused")
+
+    // Inside a [[rule]] these keys are meaningless and must not be silently ignored.
+    let inRule = try? parseRules("""
+    default = "unclear"
+
+    [[rule]]
+    app = "com.test.a"
+    category = "work"
+    activities = "workout"
+    """, homeDirectory: "/Users/alex")
+    t.expect(inRule == nil, "activities inside a [[rule]] is refused")
+}

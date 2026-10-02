@@ -1225,6 +1225,7 @@ import StalkerMac
     reportArgsTests(t)
     idleCountsTests(t)
     spanTests(t)
+    activityConfigTests(t)
 
     return t.summary()
 }
