@@ -1231,6 +1231,7 @@ import StalkerMac
     overlapAttributionTests(t)
     dayViewWithNotesTests(t)
     weekViewWithNotesTests(t)
+    noteCommandTests(t)
 
     return t.summary()
 }

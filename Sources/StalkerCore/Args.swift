@@ -20,9 +20,16 @@ public struct ReportRequest: Equatable, Sendable {
     }
 }
 
+/// What `stalker note` was asked for.
+public enum NoteAction: Equatable, Sendable {
+    case add(range: String, activity: String, date: String?)
+    case list(date: String?)
+}
+
 public enum Command: Equatable, Sendable {
     case sample
     case report(ReportRequest)
+    case note(NoteAction)
     case doctor
     /// Usage was asked for. A success.
     case help
@@ -38,6 +45,7 @@ public func parseArgs(_ args: [String]) -> Command {
     case "sample": return .sample
     case "doctor": return .doctor
     case "report": return parseReport(Array(args.dropFirst()))
+    case "note": return parseNote(Array(args.dropFirst()))
     case "help", "--help", "-h": return .help
     default: return .usageError
     }
@@ -85,6 +93,40 @@ private func parseReport(_ args: [String]) -> Command {
         i += 1
     }
     return .report(ReportRequest(date: date, span: span ?? .day, color: color, width: width))
+}
+
+/// Flags and positionals for `note`, in any order.
+///
+/// The range and activity are carried as written and validated later by the notes
+/// parser, so the command and the file can never disagree about what is well-formed.
+private func parseNote(_ args: [String]) -> Command {
+    var date: String?
+    var list = false
+    var positional: [String] = []
+
+    var i = 0
+    while i < args.count {
+        switch args[i] {
+        case "--date":
+            guard i + 1 < args.count else { return .usageError }
+            i += 1
+            date = args[i]
+        case "--list":
+            list = true
+        default:
+            guard !args[i].hasPrefix("--") else { return .usageError }
+            positional.append(args[i])
+        }
+        i += 1
+    }
+
+    if list {
+        // Listing takes no range: it reports what is already written.
+        guard positional.isEmpty else { return .usageError }
+        return .note(.list(date: date))
+    }
+    guard positional.count == 2 else { return .usageError }
+    return .note(.add(range: positional[0], activity: positional[1], date: date))
 }
 
 /// Start and end of the requested day, in unix seconds.

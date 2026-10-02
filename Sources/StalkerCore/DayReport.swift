@@ -60,7 +60,7 @@ func column(_ s: String, _ width: Int) -> String {
     padded(ellipsizeLabel(s, max: width - 1), width)
 }
 
-func clockTime(_ ts: Int, _ tz: TimeZone) -> String {
+public func clockTime(_ ts: Int, _ tz: TimeZone) -> String {
     let f = DateFormatter()
     f.timeZone = tz
     f.locale = Locale(identifier: "en_US_POSIX")

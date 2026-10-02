@@ -498,3 +498,71 @@ private let loggedRules = RuleSet(defaultCategory: "unclear", rules: [
     t.expect(plain.contains("away  "), "and the away line is unchanged")
     t.expect(!plain.contains("sleep"), "with no notes there is no rest line")
 }
+
+@MainActor func noteCommandTests(_ t: T) {
+    let utc = TimeZone(identifier: "UTC")!
+
+    // --- argument parsing ---
+    func action(_ args: [String]) -> NoteAction? {
+        if case .note(let a) = parseArgs(args) { return a }
+        return nil
+    }
+    t.eq(action(["note", "01:30-08:30", "sleep"]),
+         NoteAction.add(range: "01:30-08:30", activity: "sleep", date: nil),
+         "a range and an activity are read")
+    t.eq(action(["note", "--date", "2026-10-01", "08:30-09:00", "travel"]),
+         NoteAction.add(range: "08:30-09:00", activity: "travel", date: "2026-10-01"),
+         "--date may precede the positional arguments")
+    t.eq(action(["note", "08:30-09:00", "travel", "--date", "2026-10-01"]),
+         NoteAction.add(range: "08:30-09:00", activity: "travel", date: "2026-10-01"),
+         "or follow them")
+    t.eq(action(["note", "--list"]), NoteAction.list(date: nil), "--list takes no positionals")
+    t.eq(action(["note", "--list", "--date", "2026-10-01"]), NoteAction.list(date: "2026-10-01"),
+         "--list may be scoped to a date")
+
+    // Malformed input is refused rather than guessed, so a mistyped command cannot
+    // silently append a line meaning something else.
+    for bad in [["note"], ["note", "01:30-08:30"], ["note", "01:30-08:30", "sleep", "extra"],
+                ["note", "--date"], ["note", "--date", "2026-10-01"],
+                ["note", "--list", "01:30-08:30", "sleep"], ["note", "--nonsense"]] {
+        t.eq(parseArgs(bad), Command.usageError, "refused: \(bad.joined(separator: " "))")
+    }
+
+    // --- today's date, for the default ---
+    t.eq(todayString(now: 1_790_856_000, timeZone: utc), "2026-10-01",
+         "the default date is today in the local zone")
+
+    // --- the file itself ---
+    let dir = NSTemporaryDirectory() + "/stalker-notes-test-\(Int(Date().timeIntervalSince1970))"
+    let path = dir + "/notes.txt"
+    do {
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        t.eq(try readNotes(path: path), "", "a missing notes file reads as empty, not an error")
+
+        try appendNote(noteLine(date: "2026-10-01", from: "01:00", to: "08:00", activity: "sleep"),
+                       path: path)
+        let first = try readNotes(path: path)
+        t.expect(first.contains("2026-10-01  01:00-08:00  sleep"), "the line is written")
+        // A header so the file explains itself to whoever opens it in a year.
+        t.expect(first.hasPrefix("#"), "the file is created with a header comment")
+
+        try appendNote(noteLine(date: "2026-10-01", from: "08:30", to: "09:00", activity: "travel"),
+                       path: path)
+        let second = try readNotes(path: path)
+        t.expect(second.contains("01:00-08:00  sleep"), "the first line survives the second append")
+        t.expect(second.contains("08:30-09:00  travel"), "and the second is there too")
+        t.eq(second.components(separatedBy: "\n").filter { $0.hasPrefix("# stalker notes") }.count, 1,
+             "the header block is written once, not on every append")
+
+        // The round trip that matters: what the command writes, the report must read.
+        let parsed = try parseNotes(second, activities: Set(["sleep", "travel"]), timeZone: utc)
+        t.eq(parsed.count, 2, "both appended lines parse back")
+        t.eq(parsed.first?.activity, "sleep", "in the order they were written")
+        t.eq(parsed.last?.span.seconds, 1800, "with the durations intended")
+
+        try FileManager.default.removeItem(atPath: dir)
+    } catch {
+        t.expect(false, "the notes file test ran without throwing", "\(error)")
+    }
+}

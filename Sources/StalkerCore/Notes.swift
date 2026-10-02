@@ -54,7 +54,7 @@ func minutesOfDay(_ text: String) -> Int? {
 /// Built with `DateComponents` rather than a `DateFormatter` so that an impossible
 /// date is rejected instead of being rolled forward: a formatter reads 2026-02-30 as
 /// 2 March, which would file a block against a day the user never named.
-func startOfDay(_ text: String, timeZone: TimeZone) -> Date? {
+public func startOfDay(_ text: String, timeZone: TimeZone) -> Date? {
     let parts = text.split(separator: "-", omittingEmptySubsequences: false)
     guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
           let y = Int(parts[0]), let mo = Int(parts[1]), let d = Int(parts[2]) else { return nil }
@@ -128,4 +128,46 @@ public func parseNotes(_ text: String, activities: Set<String>, timeZone: TimeZo
 /// no command at all.
 public func noteLine(date: String, from: String, to: String, activity: String) -> String {
     "\(date)  \(from)-\(to)  \(activity)"
+}
+
+/// Today's date in the notes file's format.
+public func todayString(now: Int, timeZone: TimeZone) -> String {
+    let f = DateFormatter()
+    f.timeZone = timeZone
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM-dd"
+    return f.string(from: Date(timeIntervalSince1970: TimeInterval(now)))
+}
+
+/// The notes file's contents, or "" when it does not exist yet.
+///
+/// Absence is not an error: most days there is nothing logged, and a report must not
+/// fail because of it.
+public func readNotes(path: String) throws -> String {
+    guard FileManager.default.fileExists(atPath: path) else { return "" }
+    return try String(contentsOfFile: path, encoding: .utf8)
+}
+
+let notesHeader = """
+# stalker notes. One block per line:  DATE  FROM-TO  ACTIVITY
+#
+# Hand-editable, and re-read on every report, so correcting a line here corrects
+# the history. Delete a line to remove the block; there is no undo command because
+# there does not need to be.
+#
+# A range whose end is at or before its start ends the next day, which is how a
+# night's sleep is written: 2026-10-01  23:30-07:00  sleep
+
+"""
+
+/// Append one line, creating the file with its header the first time.
+public func appendNote(_ line: String, path: String) throws {
+    let existing = try readNotes(path: path)
+    let dir = (path as NSString).deletingLastPathComponent
+    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    // The header explains the file to whoever opens it in a year, and is written once.
+    var out = existing.isEmpty ? notesHeader : existing
+    if !out.hasSuffix("\n") { out += "\n" }
+    out += line + "\n"
+    try out.write(toFile: path, atomically: true, encoding: .utf8)
 }
