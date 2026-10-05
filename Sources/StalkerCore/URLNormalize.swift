@@ -84,3 +84,24 @@ public func normalizeFolderPath(_ raw: String) -> String? {
     while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
     return p
 }
+
+/// Strip Slack's unread-count badge from a window title.
+///
+/// Slack's AX title reads "Name (DM) - Workspace - N new items - Slack", and the
+/// badge changes continuously through the day, so the same conversation keeps
+/// generating a "new" context every time its unread count ticks over. Dropping
+/// that segment is what lets a day of DMs and channels collapse back into one row
+/// per conversation instead of a dozen near-identical ones.
+public func normalizeSlackTitle(_ raw: String) -> String {
+    guard raw.hasSuffix(" - Slack") else { return raw }
+    let kept = raw.components(separatedBy: " - ").filter { !isUnreadBadge($0) }
+    return kept.joined(separator: " - ")
+}
+
+/// "4 new items" or "1 new item".
+private func isUnreadBadge(_ segment: String) -> Bool {
+    let words = segment.split(separator: " ")
+    guard words.count == 3, words[1] == "new", words[2] == "item" || words[2] == "items"
+    else { return false }
+    return Int(words[0]) != nil
+}

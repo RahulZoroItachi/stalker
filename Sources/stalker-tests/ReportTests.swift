@@ -183,6 +183,26 @@ private func timelineRows(_ text: String) -> [String] {
         .filter { $0.contains("─") }
 }
 
+@MainActor func slackContextGroupingTests(_ t: T) {
+    // Same DM, sampled while its unread badge read "4 new items" and later "5 new
+    // items": these must land in one context bucket, not two, or a day of Slack
+    // reads as a dozen near-identical rows that quietly cap the breakdown's cap.
+    let rules = RuleSet(defaultCategory: "unclear",
+                        rules: [Rule(app: "com.tinyspeck.slackmacgap", appName: nil, context: nil,
+                                     category: "work")])
+    let ivs = [
+        mkInterval(0, 300, bundle: "com.tinyspeck.slackmacgap", app: "Slack",
+                  ctx: "Sam Carter (DM) - Acme Corp - 4 new items - Slack", samples: 5, active: 5),
+        mkInterval(300, 420, bundle: "com.tinyspeck.slackmacgap", app: "Slack",
+                  ctx: "Sam Carter (DM) - Acme Corp - 5 new items - Slack", samples: 2, active: 2),
+    ]
+    let work = totals(slice(ivs, bucketSecs: 1800, rules: rules)).first { $0.category == "work" }
+    t.eq(work?.byContext.count, 1, "the two badge counts merge into a single context")
+    t.eq(work?.byContext.first?.label, "Sam Carter (DM) - Acme Corp - Slack",
+         "the merged context carries the badge-free title")
+    t.eq(work?.byContext.first?.seconds, 420, "the merged context carries both intervals' time")
+}
+
 @MainActor func dayRenderTests(_ t: T) {
     let opts = RenderOptions(width: 100, color: false, home: "/Users/alex")
 
@@ -385,6 +405,51 @@ private func timelineRows(_ text: String) -> [String] {
     t.expect(apps.contains("Google Chrome"), "a 13-character app name is not cut")
     t.expect(apps.contains("Microsoft Edge"), "a 14-character app name is not cut")
     t.expect(!apps.contains("…hrome"), "no app name is ellipsized mid-word")
+
+    // --- a direct-context list beyond the cap folds into "other" rather than
+    //     vanishing: every category's listed rows have to add up to its own total,
+    //     the same guarantee the week table already makes for its columns ---
+    let manyContexts = [
+        mkInterval(0, 600, bundle: "com.test.work", app: "Ghostty", ctx: "/c1", samples: 10, active: 10),
+        mkInterval(600, 1140, bundle: "com.test.work", app: "Ghostty", ctx: "/c2", samples: 9, active: 9),
+        mkInterval(1140, 1620, bundle: "com.test.work", app: "Ghostty", ctx: "/c3", samples: 8, active: 8),
+        mkInterval(1620, 2040, bundle: "com.test.work", app: "Ghostty", ctx: "/c4", samples: 7, active: 7),
+        mkInterval(2040, 2400, bundle: "com.test.work", app: "Ghostty", ctx: "/c5", samples: 6, active: 6),
+        mkInterval(2400, 2700, bundle: "com.test.work", app: "Ghostty", ctx: "/c6", samples: 5, active: 5),
+        mkInterval(2700, 2940, bundle: "com.test.work", app: "Ghostty", ctx: "/c7", samples: 4, active: 4),
+    ]
+    let manyText = renderDay(manyContexts, bucketSecs: 1800, rules: dayRules, timeZone: utc,
+                             from: 0, to: 86400, options: opts)
+    for i in 1...6 {
+        t.expect(manyText.contains("/c\(i)"), "the \(i)th-ranked context is listed")
+    }
+    t.expect(!manyText.contains("/c7"), "a 7th context does not earn its own row")
+    t.expect(manyText.contains("49m"), "the category total still counts the 7th context's time")
+    let otherLine = manyText.components(separatedBy: "\n").first { $0.hasPrefix("    other") } ?? ""
+    t.expect(otherLine.contains("4m"),
+             "the dropped context folds into an other row carrying its duration, got: \(otherLine)")
+
+    // The same guarantee holds one level down, for a subcategory's own context list.
+    let meetingRules = RuleSet(defaultCategory: "unclear",
+                               rules: [Rule(app: "com.test.meet", appName: nil, context: nil,
+                                            category: "work/Meeting")])
+    let manySubContexts = [
+        mkInterval(0, 300, bundle: "com.test.meet", app: "Meet", ctx: "/m1", samples: 5, active: 5),
+        mkInterval(300, 540, bundle: "com.test.meet", app: "Meet", ctx: "/m2", samples: 4, active: 4),
+        mkInterval(540, 720, bundle: "com.test.meet", app: "Meet", ctx: "/m3", samples: 3, active: 3),
+        mkInterval(720, 840, bundle: "com.test.meet", app: "Meet", ctx: "/m4", samples: 2, active: 2),
+        mkInterval(840, 930, bundle: "com.test.meet", app: "Meet", ctx: "/m5", samples: 1, active: 1),
+    ]
+    let manySubText = renderDay(manySubContexts, bucketSecs: 1800, rules: meetingRules, timeZone: utc,
+                                from: 0, to: 86400, options: opts)
+    for i in 1...4 {
+        t.expect(manySubText.contains("/m\(i)"), "the \(i)th-ranked sub-context is listed")
+    }
+    t.expect(!manySubText.contains("/m5"), "a 5th sub-context does not earn its own row")
+    let otherSubLine = manySubText.components(separatedBy: "\n")
+        .first { $0.hasPrefix("      other") } ?? ""
+    t.expect(otherSubLine.contains("1m"),
+             "the dropped sub-context folds into its own other row, got: \(otherSubLine)")
 }
 
 @MainActor func weekRangeTests(_ t: T) {

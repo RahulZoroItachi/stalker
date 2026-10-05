@@ -1030,6 +1030,22 @@ import StalkerMac
     t.eq(normalizeFolderPath(""), nil, "an empty answer is not a path")
     t.eq(normalizeFolderPath("Projects"), nil, "a bare folder name is rejected, not accepted as a path")
 
+    // --- Slack's unread-count badge, stripped so a conversation stays one context ---
+    // Slack's AX title reads "Name (DM) - Workspace - N new items - Slack", and the
+    // badge changes continuously through the day, fragmenting one DM into a dozen
+    // near-identical contexts in the breakdown.
+    t.eq(normalizeSlackTitle("Sam Carter (DM) - Acme Corp - 4 new items - Slack"),
+         "Sam Carter (DM) - Acme Corp - Slack", "the unread badge is stripped")
+    t.eq(normalizeSlackTitle("Sam Carter (DM) - Acme Corp - 5 new items - Slack"),
+         "Sam Carter (DM) - Acme Corp - Slack",
+         "a different badge count collapses to the same title as the one above")
+    t.eq(normalizeSlackTitle("Dana Ruiz (DM) - Acme Corp - 1 new item - Slack"),
+         "Dana Ruiz (DM) - Acme Corp - Slack", "the singular \"item\" is also stripped")
+    t.eq(normalizeSlackTitle("weekly-tennis (Channel) - Acme Corp - Slack"),
+         "weekly-tennis (Channel) - Acme Corp - Slack", "a title with no badge is unchanged")
+    t.eq(normalizeSlackTitle("docs.google.com/document/d/abc/edit"),
+         "docs.google.com/document/d/abc/edit", "a non-Slack context is left untouched")
+
     t.eq(shouldUseFolderProbe(bundleId: "com.apple.finder"), true, "Finder uses the folder probe")
     t.eq(shouldUseFolderProbe(bundleId: "com.google.Chrome"), false, "a browser does not")
     t.eq(shouldUseFolderProbe(bundleId: nil), false, "a nil bundle id does not")
@@ -1216,6 +1232,7 @@ import StalkerMac
              "the subcategory never appears as a top-level category of its own")
 
     formatTests(t)
+    slackContextGroupingTests(t)
     engagementShareTests(t)
     dayRenderTests(t)
     dayLayoutTests(t)

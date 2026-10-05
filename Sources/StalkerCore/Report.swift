@@ -87,12 +87,16 @@ public func slice(_ ivs: [Interval], bucketSecs: Int, rules: RuleSet,
         // samples = 0, which is why this is a guard and not a plain divide.
         let activeRatio = iv.samples > 0 ? Double(iv.active) / Double(iv.samples) : 0
         let engagedRatio = iv.samples > 0 ? Double(iv.engaged) / Double(iv.samples) : 0
+        // Normalized here rather than at collection, same as category rules: the raw
+        // title stays on disk untouched, and a day already recorded still groups
+        // correctly the next time a report runs over it.
+        let context = iv.context.map(normalizeSlackTitle)
         var b = bucketStart(start, bucketSecs: bucketSecs)
         while b < end {
             let secs = max(0, min(end, b + bucketSecs) - max(start, b))
             if secs > 0 {
                 out.append(Slice(bucketStart: b, category: category, kind: iv.kind,
-                                 appName: iv.appName, context: iv.context, seconds: secs,
+                                 appName: iv.appName, context: context, seconds: secs,
                                  activeSeconds: min(secs, Int((Double(secs) * activeRatio).rounded())),
                                  engagedSeconds: min(secs, Int((Double(secs) * engagedRatio).rounded()))))
             }

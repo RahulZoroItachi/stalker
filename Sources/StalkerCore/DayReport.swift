@@ -197,18 +197,26 @@ public func renderDay(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, ru
             // would restate the subtotal directly above with nothing added. Two or more
             // earn their place by showing how the time divides.
             if sub.byContext.count > 1 {
-                for c in sub.byContext.prefix(4) where worthShowing(c.seconds) {
-                    rows.append((6, c.label, c.seconds))
-                }
+                let shown = sub.byContext.prefix(4).filter { worthShowing($0.seconds) }
+                for c in shown { rows.append((6, c.label, c.seconds)) }
+                // Beyond the cap, a context does not vanish: it folds into "other", so
+                // this subcategory's own rows still add up to the subtotal above them.
+                let other = sub.seconds - shown.reduce(0) { $0 + $1.seconds }
+                if worthShowing(other) { rows.append((6, "other", other)) }
             }
         }
         // Same rule for the parent, but only when it has no subcategories. With one, a
         // lone direct context is a part of the total rather than the whole of it, so
         // dropping it would leave the arithmetic unexplained.
         if ct.byContext.count > 1 || !ct.subcategories.isEmpty {
-            for c in ct.byContext.prefix(6) where worthShowing(c.seconds) {
-                rows.append((4, c.label, c.seconds))
-            }
+            let shown = ct.byContext.prefix(6).filter { worthShowing($0.seconds) }
+            for c in shown { rows.append((4, c.label, c.seconds)) }
+            // ct.byContext already excludes every subcategory's time, so the parent's
+            // own "other" is exactly what the cap left out of its direct contexts —
+            // the same guarantee the week table makes for its own "other" column.
+            let direct = ct.byContext.reduce(0) { $0 + $1.seconds }
+            let other = direct - shown.reduce(0) { $0 + $1.seconds }
+            if worthShowing(other) { rows.append((4, "other", other)) }
         }
         return rows
     }
