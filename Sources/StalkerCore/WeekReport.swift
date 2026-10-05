@@ -70,7 +70,7 @@ public func sinceRange(days: Int, now: Int, timeZone: TimeZone) -> (from: Int, t
 ///
 /// The day number is a number in a table of numbers, so it is right-aligned. A plain
 /// "EEE d" leaves the 1st of the month in a different column from the 28th.
-private func dayLabel(_ ts: Int, _ tz: TimeZone) -> String {
+func dayLabel(_ ts: Int, _ tz: TimeZone) -> String {
     let f = DateFormatter()
     f.timeZone = tz
     f.locale = Locale(identifier: "en_US_POSIX")
@@ -119,11 +119,25 @@ public func renderWeek(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, r
     func inList(_ c: String) -> Bool { !awayCategories.contains(c) && !rules.rest.contains(c) }
     let hasLogged = rules.activities.contains { (weekSeconds[$0] ?? 0) > 0 }
 
+    let locked = weekSeconds[Kind.locked.rawValue] ?? 0
+    let gap = weekSeconds[Kind.gap.rawValue] ?? 0
+    // Once some away time has a reason, "away" is the wrong word for what is left. The
+    // day report draws the same distinction, and the column heading has to use the word
+    // the line below the table uses.
+    let awayLabel = hasLogged ? "unaccounted" : "away"
+    // Only when there is some. A column of blank cells would widen the table to say
+    // nothing, and a week with no gaps in it is the week that needs the room least.
+    let hasAway = locked + gap > 0
+
     let ranked = weekSeconds.filter { inList($0.key) }
         .sorted { ($0.value, $1.key) > ($1.value, $0.key) }
     let named = ranked.prefix(weekColumnLimit).map(\.key)
     let hasOther = ranked.count > weekColumnLimit
+    // Away sits past the total rather than among the categories. The total is the sum of
+    // the columns to its left, and folding a night's sleep into it would make "logged"
+    // mean something it does not.
     let columns = named + (hasOther ? ["other"] : []) + [hasLogged ? "logged" : "tracked"]
+                  + (hasAway ? [awayLabel] : [])
 
     /// Seconds per column for one day, in `columns` order.
     func cells(_ cats: [CategoryTotal]) -> [Int] {
@@ -134,6 +148,12 @@ public func renderWeek(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, r
             row.append(byName.filter { !named.contains($0.key) }.values.reduce(0, +))
         }
         row.append(byName.values.reduce(0, +))
+        // Read off the day's own categories, not from the week total, so the column
+        // shows which days the time went missing rather than only how much did.
+        if hasAway {
+            row.append(cats.filter { awayCategories.contains($0.category) }
+                           .reduce(0) { $0 + $1.seconds })
+        }
         return row
     }
 
@@ -153,9 +173,11 @@ public func renderWeek(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, r
         widths.append(max(name.count, values.map(\.count).max() ?? 0) + 3)
     }
 
-    // Only the named categories are coloured. `other` is a bucket rather than a
-    // category and `tracked` is the sum of them all, so neither owns a colour.
-    let colors = colorMap(named)
+    // Only the named categories take a palette colour. `other` is a bucket rather than a
+    // category and `tracked` is the sum of them all, so neither owns one. Away gets the
+    // same grey it has everywhere else: it is context, not content, so it recedes.
+    var colors = colorMap(named)
+    if hasAway { colors[awayLabel] = awayColor }
     func row(_ label: String, _ texts: [String], paint: Bool = false) -> String {
         var line = "  " + padded(label, labelWidth)
         for (c, text) in texts.enumerated() {
@@ -180,11 +202,15 @@ public func renderWeek(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, r
     lines.append(row("total", totalCells.map(cellText)))
 
     // Percentages of the range's tracked time. The tracked column itself is always
-    // 100%, so it is left blank rather than stating the obvious.
-    let tracked = totalCells.last ?? 0
-    var shares = totalCells.dropLast().map { $0 > 0 ? "\(percent($0, of: tracked))%" : "" }
-    shares.append("")
-    lines.append(row("", Array(shares)))
+    // 100%, so it is left blank rather than stating the obvious, and away is left blank
+    // because it is not a share of tracked time at all: nine hours asleep against seven
+    // hours worked would print 128%.
+    let trackedColumn = columns.count - (hasAway ? 2 : 1)
+    let tracked = totalCells[trackedColumn]
+    let shares = columns.indices.map { i in
+        i < trackedColumn && totalCells[i] > 0 ? "\(percent(totalCells[i], of: tracked))%" : ""
+    }
+    lines.append(row("", shares))
 
     // Rest, below the table rather than inside it.
     let restNames = rules.rest.filter { (weekSeconds[$0] ?? 0) >= 60 }.sorted()
@@ -195,17 +221,16 @@ public func renderWeek(_ ivs: [Interval], notes: [Note] = [], bucketSecs: Int, r
         }
     }
 
-    // Away time, kept out of the table but not out of the report: without it a week
-    // asleep and a week with a dead sampler look identical.
-    let locked = weekSeconds[Kind.locked.rawValue] ?? 0
-    let gap = weekSeconds[Kind.gap.rawValue] ?? 0
-    if locked + gap > 0 {
+    // The column carries the figure now, so this line carries only what one column
+    // cannot: how much of it was a locked screen and how much was a sampler recording
+    // nothing. A week asleep and a week with a dead sampler share an away total and
+    // nothing else.
+    if hasAway {
         var parts: [String] = []
         if locked > 0 { parts.append("locked \(formatDuration(locked))") }
         if gap > 0 { parts.append("no data \(formatDuration(gap))") }
         if restNames.isEmpty { lines.append("") }
-        lines.append("\(hasLogged ? "unaccounted" : "away")  \(formatDuration(locked + gap))   "
-                     + parts.joined(separator: " · "))
+        lines.append("\(awayLabel)  " + parts.joined(separator: " · "))
     }
 
     return lines.joined(separator: "\n")

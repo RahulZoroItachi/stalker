@@ -488,8 +488,12 @@ private let loggedRules = RuleSet(defaultCategory: "unclear", rules: [
     t.expect(totalRow.contains("1h 30m"), "the week logged an hour and a half, got: \(totalRow)")
 
     // --- what nothing explained ---
-    t.expect(text.contains("unaccounted"), "the week reports unaccounted time")
-    t.expect(!text.contains("away  "), "and not as away, since some of it now has a reason")
+    // One word for one idea: the column heading and the line below the table both say
+    // "unaccounted" once a note has explained part of the time away.
+    t.expect(header.contains("unaccounted"),
+             "the week gives unaccounted time a column, got: \(header)")
+    t.expect(text.contains("unaccounted  no data "), "and names its kind below the table")
+    t.expect(!text.contains("away"), "neither calls it away, since some of it now has a reason")
 
     // --- a week with no notes renders exactly as before ---
     let plain = renderWeek(ivs, bucketSecs: 1800, rules: loggedRules, timeZone: utc,

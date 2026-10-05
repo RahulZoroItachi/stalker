@@ -480,12 +480,60 @@ private func timelineRows(_ text: String) -> [String] {
     t.expect(text.contains("86%"), "work is 86% of the week")
     t.expect(text.contains("14%"), "fun is 14% of the week")
 
-    // --- away time is reported, not silently dropped ---
-    let withAway = renderWeek(ivs + [mkInterval(mon + 20000, mon + 27200, kind: .gap, samples: 0, active: 0)],
-                              bucketSecs: 1800, rules: dayRules, timeZone: utc,
+    // --- away time is a column of its own, not only a footer ---
+    // Two hours of Monday with nothing recorded. Which day lost the time is the thing a
+    // single footer total cannot say, and the thing that tells a night's sleep apart
+    // from a sampler that stopped.
+    let awayIvs = ivs + [mkInterval(mon + 20000, mon + 27200, kind: .gap, samples: 0, active: 0)]
+    let withAway = renderWeek(awayIvs, bucketSecs: 1800, rules: dayRules, timeZone: utc,
                               from: mon, to: thu, options: opts)
-    t.expect(withAway.contains("away"), "the week reports time away from the machine")
-    t.expect(withAway.contains("no data 2h 00m"), "and distinguishes missing data")
+    let awayRows = withAway.components(separatedBy: "\n")
+    let awayHeader = awayRows.first { $0.contains("tracked") } ?? ""
+    t.expect(awayHeader.contains("away"), "away has a column, got: \(awayHeader)")
+    t.expect(awayHeader.hasSuffix("away"),
+             "and sits past the total, so the row still sums to it, got: \(awayHeader)")
+    let awayMon = awayRows.first { $0.hasPrefix("  Mon 28") } ?? ""
+    let awayTue = awayRows.first { $0.hasPrefix("  Tue 29") } ?? ""
+    t.expect(awayMon.hasSuffix("2h 00m"), "Monday's two away hours land on Monday, got: \(awayMon)")
+    t.expect(awayTue.hasSuffix("1h 00m"),
+             "Tuesday, which lost nothing, leaves the cell blank, got: \(awayTue)")
+
+    // Away is excluded from the total and from the percentages. Counting it in either
+    // would make "tracked" mean "hours in the day" and let the shares exceed 100%.
+    let awayTotal = awayRows.first { $0.contains("total") } ?? ""
+    t.expect(awayTotal.contains("3h 30m"), "tracked time is unchanged by away, got: \(awayTotal)")
+    t.eq(awayRows.first { $0.contains("%") } ?? "",
+         text.components(separatedBy: "\n").first { $0.contains("%") } ?? "",
+         "and the percentages are unchanged too")
+
+    // The footer keeps only what the column cannot say: which of it was a locked screen
+    // and which was no data at all.
+    t.expect(withAway.contains("away  no data 2h 00m"),
+             "the line below the table splits away by kind without repeating its total")
+    t.expect(!withAway.contains("away  2h 00m"), "and does not state the total twice")
+
+    // --- the away heading recedes rather than taking a palette colour ---
+    let colouredAway = renderWeek(awayIvs, bucketSecs: 1800, rules: dayRules, timeZone: utc,
+                                  from: mon, to: thu,
+                                  options: RenderOptions(width: 100, color: true, home: ""))
+    t.expect(colouredAway.contains("\u{1B}[90m"), "the away column is painted grey, not a category colour")
+    t.eq(stripANSI(colouredAway), withAway, "and colour still changes nothing about the layout")
+
+    // --- exact layout with away, as a guard against accidental drift ---
+    let expectedAway = [
+        "Mon 28 Sep 2026 ─ Wed 30 Sep 2026",
+        "",
+        "             work   fun   tracked     away",
+        "  Mon 28   2h 00m   30m    2h 30m   2h 00m",
+        "  Tue 29   1h 00m          1h 00m",
+        "  Wed 30",
+        "  ────────────────────────────────────────",
+        "  total    3h 00m   30m    3h 30m   2h 00m",
+        "              86%   14%",
+        "",
+        "away  no data 2h 00m",
+    ].joined(separator: "\n")
+    t.eq(withAway, expectedAway, "the week with away time matches the agreed layout exactly")
 
     // --- many categories collapse into an "other" column ---
     // A week can touch a dozen categories, and a dozen columns is not a table anyone
@@ -523,22 +571,6 @@ private func timelineRows(_ text: String) -> [String] {
     t.eq(text, expected, "the rendered week matches the agreed layout exactly")
 }
 
-/// Remove ANSI escape sequences, so a coloured line can be compared with the plain
-/// one it must be identical to.
-private func stripANSI(_ s: String) -> String {
-    var out = "", inEscape = false
-    for ch in s {
-        if inEscape {
-            if ch == "m" { inEscape = false }
-        } else if ch == "\u{1B}" {
-            inEscape = true
-        } else {
-            out.append(ch)
-        }
-    }
-    return out
-}
-
 @MainActor func widthAndColorTests(_ t: T) {
     // --- clampWidth ---
     // A terminal narrower than 80 cannot hold the table, and beyond 160 the breakdown
@@ -556,6 +588,21 @@ private func stripANSI(_ s: String) -> String {
     t.eq(colorize("work", 36, enabled: true), "\u{1B}[36mwork\u{1B}[0m",
          "colour enabled wraps the text in the escape and resets after it")
     t.eq(stripANSI(colorize("work", 36, enabled: true)), "work", "stripping the escape recovers the text")
+
+    // --- band ---
+    t.eq(band("abc", width: 10, enabled: false), "abc", "band disabled leaves the text alone")
+    t.expect(band("abc", width: 5, enabled: true).hasPrefix("\u{1B}[48;5;"),
+             "band enabled opens with a background escape")
+    t.eq(stripANSI(band("abc", width: 5, enabled: true)), "abc  ",
+         "band pads a line to width, measured after stripping colour")
+    t.eq(stripANSI(band("a\nbb", width: 3, enabled: true)), "a  \nbb ",
+         "each line of a multi-line block is padded independently")
+
+    let withReset = "\u{1B}[36mx\u{1B}[0my"
+    let banded = band(withReset, width: 4, enabled: true)
+    t.eq(stripANSI(banded), "xy  ", "band pads by visible width, ignoring an inner colour's escapes")
+    t.expect(banded.contains("\u{1B}[0m\u{1B}[48;5;"),
+             "the background is reapplied after an inner reset, so it survives past a coloured cell")
 
     // --- colour never changes the layout ---
     // The escape sequences have no width on screen but plenty in a String, so padding

@@ -1232,6 +1232,8 @@ import StalkerMac
     dayViewWithNotesTests(t)
     weekViewWithNotesTests(t)
     noteCommandTests(t)
+    gridTests(t)
+    gridRenderTests(t)
 
     return t.summary()
 }

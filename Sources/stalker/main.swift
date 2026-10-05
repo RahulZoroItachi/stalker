@@ -94,13 +94,26 @@ func runReport(_ req: ReportRequest) -> Int32 {
                                    activities: Set(rules.activities), timeZone: tz)
 
         let ivs = try store.intervals(from: range.from, to: range.to)
-        if week {
-            print(renderWeek(ivs, notes: notes, bucketSecs: bucketSeconds, rules: rules,
-                             timeZone: tz, from: range.from, to: range.to, options: options))
-        } else {
-            print(renderDay(ivs, notes: notes, bucketSecs: bucketSeconds, rules: rules,
-                            timeZone: tz, from: range.from, to: range.to, options: options))
-        }
+        let table = week
+            ? renderWeek(ivs, notes: notes, bucketSecs: bucketSeconds, rules: rules,
+                        timeZone: tz, from: range.from, to: range.to, options: options)
+            : renderDay(ivs, notes: notes, bucketSecs: bucketSeconds, rules: rules,
+                       timeZone: tz, from: range.from, to: range.to, options: options)
+
+        // The grid is a second view of the same slices rather than a section of either
+        // table, so it is composed here instead of inside the renderers. Both tables stay
+        // exactly as they were, and the grid keeps the one rule they do not share: with
+        // colour off it has nothing to say, so it says that instead of drawing 144
+        // identical characters. Its width is fixed at 144 blocks, so the terminal clamp
+        // that governs the tables does not apply to it.
+        let grid = renderGrid(ivs, notes: notes, rules: rules, timeZone: tz,
+                              from: range.from, to: range.to, options: options)
+        let report = grid.isEmpty ? table : table + "\n\n" + grid
+
+        // Banded as one block rather than inside each renderer, so a run reads as a
+        // single highlighted card: the one edge nothing printed between two shell
+        // prompts can draw for itself.
+        print(band(report, width: options.width, enabled: options.color))
         return 0
     } catch {
         FileHandle.standardError.write("report failed: \(error)\n".data(using: .utf8)!)
