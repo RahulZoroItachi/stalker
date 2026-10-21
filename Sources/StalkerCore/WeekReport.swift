@@ -5,7 +5,7 @@ import Foundation
 /// A week can touch a dozen categories, and a dozen columns is not a table anyone can
 /// read. The tail is summed into `other` rather than dropped, so every row still adds
 /// up to its tracked figure.
-let weekColumnLimit = 5
+let weekColumnLimit = 6
 
 private func calendar(_ tz: TimeZone) -> Calendar {
     var cal = Calendar(identifier: .gregorian)

@@ -607,7 +607,7 @@ private func timelineRows(_ text: String) -> [String] {
     var manyIvs = [Interval]()
     for i in 0..<8 {
         manyRules.append(Rule(app: "com.test.c\(i)", appName: nil, context: nil, category: "cat\(i)"))
-        // Descending durations, so which categories make the top five is unambiguous.
+        // Descending durations, so which categories make the top six is unambiguous.
         manyIvs.append(mkInterval(mon + i * 3600, mon + i * 3600 + (8 - i) * 600,
                                   bundle: "com.test.c\(i)", app: "App", ctx: "/x",
                                   samples: 20, active: 20))
@@ -615,11 +615,11 @@ private func timelineRows(_ text: String) -> [String] {
     let many = renderWeek(manyIvs, bucketSecs: 1800,
                           rules: RuleSet(defaultCategory: "unclear", rules: manyRules),
                           timeZone: utc, from: mon, to: thu, options: opts)
-    for i in 0..<5 { t.expect(many.contains("cat\(i)"), "cat\(i) is among the top five columns") }
-    t.expect(!many.contains("cat6"), "the sixth-ranked category has no column of its own")
+    for i in 0..<6 { t.expect(many.contains("cat\(i)"), "cat\(i) is among the top six columns") }
+    t.expect(!many.contains("cat6"), "the seventh-ranked category has no column of its own")
     t.expect(many.contains("other"), "the long tail is summed into an other column")
-    // cat5 + cat6 + cat7 = 1800 + 1200 + 600 = 3600s
-    t.expect(many.contains("1h 00m"), "the other column carries the tail's real total")
+    // cat6 + cat7 = 1200 + 600 = 1800s
+    t.expect(many.contains("30m"), "the other column carries the tail's real total")
 
     // --- exact layout, as a guard against accidental drift ---
     let expected = [
