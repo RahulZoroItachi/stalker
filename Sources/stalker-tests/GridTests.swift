@@ -134,8 +134,8 @@ private func codes(_ line: String) -> [Int] {
 
     let row = rowFor(text, "Mon 28")
     t.eq(visible(row).filter { $0 == "▇" }.count, 144, "a full day is 144 blocks on the row")
-    // The width the terminal has to hold. 2 margin + 6 label + 2 gap + 144 blocks.
-    t.eq(visible(row).count, 154, "the row is exactly 154 columns wide")
+    // 2 margin + 6 label + 2 gap + 144 blocks + 23 hour dividers between the 24 sections.
+    t.eq(visible(row).count, 177, "the row is exactly 177 columns wide")
 
     // --- a block's colour is its category's ---
     t.eq(code(row, 0), code(row, 5), "the first hour of work is one colour throughout")

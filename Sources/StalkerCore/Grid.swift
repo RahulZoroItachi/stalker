@@ -61,6 +61,23 @@ public func gridBlocks(_ ivs: [Interval], notes: [Note] = [], rules: RuleSet,
 /// a half block thins each day to the point where a short run disappears.
 let gridGlyph = "▇"
 
+/// Plain rather than coloured, so it reads as a rule and not a 25th category, and so it
+/// adds nothing to the colour codes a test (or a script) scans the row for.
+let hourDivider = "│"
+
+/// Splits a 144-long, ten-minutes-per-block row into 24 one-hour sections by inserting
+/// `divider` after every sixth element. The eye can then find an hour mark by its own
+/// position in the bar instead of pacing it out against the ruler above.
+func withHourDividers<T>(_ items: [T], divider: T) -> [T] {
+    var out: [T] = []
+    out.reserveCapacity(items.count + items.count / 6)
+    for (i, item) in items.enumerated() {
+        if i > 0 && i % 6 == 0 { out.append(divider) }
+        out.append(item)
+    }
+    return out
+}
+
 /// Everything past the palette shares one neutral grey.
 ///
 /// `categoryPalette` holds eight colours and a real week can touch more categories than
@@ -149,13 +166,17 @@ public func renderGrid(_ ivs: [Interval], notes: [Note] = [], rules: RuleSet,
             ruler[b + k] = ch
         }
     }
+    // Widened by the same rule as the rows below, with blanks rather than dividers, so
+    // a label still sits above the hour it names once the row grows past 144 columns.
+    ruler = withHourDividers(ruler, divider: " ")
     // A trailing-whitespace line is noise in a diff or a paste, same as in the table.
     var rulerLine = indent + String(ruler)
     while rulerLine.hasSuffix(" ") { rulerLine.removeLast() }
     var lines = [rulerLine]
 
     for r in rows {
-        lines.append("  " + padded(r.label, labelWidth) + "  " + r.blocks.map(paint).joined())
+        lines.append("  " + padded(r.label, labelWidth) + "  "
+                     + withHourDividers(r.blocks.map(paint), divider: hourDivider).joined())
     }
 
     // --- legend ---
