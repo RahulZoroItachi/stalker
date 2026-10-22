@@ -862,15 +862,15 @@ import StalkerMac
                  "no bottle, which would be a prebuilt binary again")
         t.expect(formulaCode.contains("stalker setup"),
                  "the caveats tell the user the one remaining step")
-        // An upgrade must repair itself. Without this, every upgrade leaves the
-        // agent running a stale binary until the user happens to re-run setup.
-        // post_install_steps, not the legacy post_install, which brew style rejects.
-        t.expect(formulaCode.contains("post_install_steps"),
-                 "the formula refreshes the agent's binary on upgrade")
-        t.expect(!formulaCode.contains("def post_install"),
-                 "using the current hook, not the legacy one")
-        t.expect(formulaCode.contains("refresh"),
-                 "by calling refresh, which prompts for nothing")
+        // No post-install hook. Homebrew runs those with an isolated HOME, so
+        // `security find-identity` sees zero identities and signing is impossible.
+        // Measured: 1 identity with the real HOME, 0 with an isolated one.
+        t.expect(!formulaCode.contains("post_install"),
+                 "no post-install hook, which could never sign without the keychain")
+        // So the caveats have to say what an upgrade needs, and that nothing breaks.
+        t.expect(f.contains("doctor"), "the caveats point at doctor for drift")
+        t.expect(f.contains("once, ever"),
+                 "and promise the permission is granted once, which is the real fix")
         t.expect(formulaCode.contains("head "),
                  "a --HEAD install is offered, for friends tracking main")
         for name in ["rules.toml.default", "stalker.zsh", "stalker.sample.plist"] {
