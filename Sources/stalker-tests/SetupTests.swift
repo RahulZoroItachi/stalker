@@ -129,6 +129,20 @@ import StalkerCore
     t.eq(canonicalBrewPath("/opt/homebrew/Cellar"), "/opt/homebrew/Cellar",
          "a truncated Cellar path is not mangled")
 
+    // The binary the agent runs lives at a path that never moves, because a TCC
+    // grant is keyed to the resolved real path. Measured: a grant on
+    // /opt/homebrew/bin/stalker died on `brew upgrade` even though the path and the
+    // designated requirement were both unchanged, because the symlink's target moved
+    // from Cellar/0.1.0 to Cellar/0.1.1. Spec §10.
+    let ps = Paths.standard(home: "/Users/me")
+    t.eq(ps.agentBinaryPath, "/Users/me/Library/Application Support/stalker/bin/stalker",
+         "the agent's binary sits at a fixed path under the data directory")
+    t.expect(ps.agentBinaryPath.hasPrefix(ps.dataDir),
+             "inside the data directory, so uninstall already knows where it is")
+    t.eq(parseArgs(["refresh"]), Command.refresh,
+         "refresh re-installs that copy after an upgrade, without touching anything else")
+    t.eq(parseArgs(["refresh", "--x"]), Command.usageError, "and takes no arguments")
+
     // A launchd label and an Automation grant are machine-global, not per-home. So a
     // run against an overridden home must not touch either: bootstrapping an agent
     // would hijack the real one. That is not hypothetical. It happened, pointing the

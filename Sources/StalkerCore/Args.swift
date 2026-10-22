@@ -37,6 +37,10 @@ public enum Command: Equatable, Sendable {
     /// Undo what `setup` did. The database and the rules file survive unless
     /// `purge`, because a trial needs an exit that is not also a deletion.
     case uninstall(purge: Bool)
+    /// Re-install and re-sign the binary the agent runs, and nothing else. What a
+    /// `brew upgrade` needs, and safe to run unattended because the certificate
+    /// already exists by then and the agent's path does not change.
+    case refresh
     /// The version, so a report from someone else's machine can be placed against
     /// a build. A success, like `help`.
     case version
@@ -57,6 +61,7 @@ public func parseArgs(_ args: [String]) -> Command {
     case "note": return parseNote(Array(args.dropFirst()))
     case "setup": return parseSetup(Array(args.dropFirst()))
     case "uninstall": return parseUninstall(Array(args.dropFirst()))
+    case "refresh": return args.count == 1 ? .refresh : .usageError
     case "version", "--version": return .version
     case "help", "--help", "-h": return .help
     default: return .usageError

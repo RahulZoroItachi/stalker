@@ -117,6 +117,63 @@ private func ensureSigningCertificate() -> Bool {
     return true
 }
 
+/// Put the binary the agent runs at its fixed path, and sign it there.
+///
+/// Copied rather than symlinked, and signed after copying. A symlink would defeat
+/// the whole point: TCC resolves one and keys the grant to the target, which is what
+/// broke when Homebrew's Cellar directory was renamed by an upgrade.
+///
+/// Copying onto itself is skipped rather than attempted, so this is safe to re-run.
+private func installAgentBinary(from source: String) -> Bool {
+    let fm = FileManager.default
+    let dest = paths.agentBinaryPath
+
+    if source != dest {
+        try? fm.removeItem(atPath: dest)
+        guard (try? fm.copyItem(atPath: source, toPath: dest)) != nil else {
+            print("   could not copy \(source) to \(dest)")
+            return false
+        }
+    }
+    guard sh("/usr/bin/codesign", ["-f", "-s", signIdentity, "-i", "stalker", dest]).status == 0
+    else {
+        print("   could not sign \(dest)")
+        return false
+    }
+    print("   installed and signed \(dest)")
+    print("   this path never changes, which is what keeps the Accessibility grant alive")
+    return true
+}
+
+/// Re-install the agent's binary after an upgrade, and nothing else.
+///
+/// What a `brew upgrade` needs. The agent's path does not change, so launchd needs
+/// no attention, and the certificate already exists by then, so nothing prompts. That
+/// is what lets the formula call this from `post_install` and leave the user with
+/// nothing to do.
+///
+/// Forgiving on purpose: if `setup` has never run there is nothing to refresh, and a
+/// non-zero exit here would fail somebody's `brew upgrade` over it.
+func runRefresh() -> Int32 {
+    let fm = FileManager.default
+    let runningExe = stableBinaryPath(Bundle.main.executableURL?.path ?? CommandLine.arguments[0],
+                                      exists: { fm.fileExists(atPath: $0) })
+
+    guard fm.fileExists(atPath: paths.dataDir) else {
+        print("stalker: nothing to refresh, run `stalker setup` first")
+        return 0
+    }
+    guard signingIdentityExists() else {
+        print("stalker: no signing certificate yet, run `stalker setup` first")
+        return 0
+    }
+    guard installAgentBinary(from: runningExe) else {
+        print("stalker: could not refresh the agent's binary, run `stalker setup`")
+        return 0
+    }
+    return 0
+}
+
 /// The per-user half of installing stalker.
 ///
 /// A Homebrew formula may not do any of this: it must not edit `~/.zshrc`, must not
@@ -128,47 +185,48 @@ func runSetup(supportDirOverride: String?) -> Int32 {
     // Canonicalised, so a Cellar invocation cannot pin the agent and the shell hook
     // to a version directory `brew cleanup` will delete, and with a fallback so that
     // an unlinked formula still installs. See `stableBinaryPath`.
-    let exe = stableBinaryPath(Bundle.main.executableURL?.path ?? CommandLine.arguments[0],
-                               exists: { fm.fileExists(atPath: $0) })
+    // The binary that is running. Used only to find the support files beside it.
+    let runningExe = stableBinaryPath(Bundle.main.executableURL?.path ?? CommandLine.arguments[0],
+                                      exists: { fm.fileExists(atPath: $0) })
+    // The binary the agent will run, and the one that gets the Accessibility grant.
+    let exe = paths.agentBinaryPath
 
     print("stalker setup")
 
-    print("1. signing identity")
-    guard ensureSigningCertificate() else { return 1 }
-    let signed = sh("/usr/bin/codesign", ["-f", "-s", signIdentity, "-i", "stalker", exe])
-    guard signed.status == 0 else {
-        print("   could not sign \(exe)")
+    print("1. directories")
+    let configDir = URL(fileURLWithPath: paths.rulesPath).deletingLastPathComponent().path
+    let binDir = URL(fileURLWithPath: paths.agentBinaryPath).deletingLastPathComponent().path
+    for dir in [paths.dataDir, paths.courierDir, configDir, binDir,
+                home + "/Library/LaunchAgents"] {
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    }
+    guard fm.fileExists(atPath: paths.courierDir), fm.fileExists(atPath: binDir) else {
+        print("   could not create the directories under \(paths.dataDir)")
         return 1
     }
-    print("   signed \(exe) as \(signIdentity)")
 
-    print("2. support files")
-    guard let support = resolveSupportDir(executablePath: exe, override: supportDirOverride,
+    print("2. signing identity")
+    guard ensureSigningCertificate() else { return 1 }
+
+    print("3. the binary the agent runs")
+    guard installAgentBinary(from: runningExe) else { return 1 }
+
+    print("4. support files")
+    guard let support = resolveSupportDir(executablePath: runningExe, override: supportDirOverride,
                                           exists: { fm.fileExists(atPath: $0) }) else {
         // Named paths rather than a silent default: skipping the rules file and the
         // shell hook would leave an install that looks finished and records little.
         print("   could not find the support files. Tried:")
-        for c in supportDirCandidates(executablePath: exe) { print("     \(c)") }
+        for c in supportDirCandidates(executablePath: runningExe) { print("     \(c)") }
         print("   pass --support-dir PATH to say where they are")
         return 1
     }
     print("   reading from \(support)")
 
-    print("3. directories")
-    let configDir = URL(fileURLWithPath: paths.rulesPath).deletingLastPathComponent().path
-    for dir in [paths.dataDir, paths.courierDir, configDir,
-                home + "/Library/LaunchAgents"] {
-        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    }
-    guard fm.fileExists(atPath: paths.courierDir) else {
-        print("   could not create \(paths.courierDir)")
-        return 1
-    }
-
-    print("4. excluding the database from Time Machine")
+    print("5. excluding the database from Time Machine")
     sh("/usr/bin/tmutil", ["addexclusion", paths.dataDir])
 
-    print("5. rules")
+    print("6. rules")
     if fm.fileExists(atPath: paths.rulesPath) {
         print("   \(paths.rulesPath) already exists, leaving it alone")
     } else {
@@ -180,7 +238,7 @@ func runSetup(supportDirOverride: String?) -> Int32 {
         print("   installed default rules, edit \(paths.rulesPath) to match your directories")
     }
 
-    print("6. shell hook")
+    print("7. shell hook")
     // Resolve symlinks first. An atomic write replaces a symlink with a regular
     // file, which would silently detach a stow/chezmoi/dotbot dotfile repo from the
     // shell that was reading it.
@@ -212,7 +270,7 @@ func runSetup(supportDirOverride: String?) -> Int32 {
         print("           \(line.trimmingCharacters(in: .whitespaces))")
     }
 
-    print("7. launchd agents")
+    print("8. launchd agents")
     let wiring = shouldTouchMachineState(homeOverride: homeOverride, executablePath: exe)
     if homeOverride != nil {
         print("   SKIPPED. --home was given. A launchd label is keyed per-user by the")
@@ -256,7 +314,7 @@ func runSetup(supportDirOverride: String?) -> Int32 {
         print("   loaded \(agent.label) → \(exe)")
     }
 
-    print("8. automation prompts")
+    print("9. automation prompts")
     if wiring {
         // Each AppleScript target is a separate grant, and the first request for one
         // prompts. Under launchd there is nobody to answer, so they are raised once
@@ -273,7 +331,7 @@ func runSetup(supportDirOverride: String?) -> Int32 {
 
     print("""
 
-    9. ONE STEP LEFT, and only you can do it
+    10. ONE STEP LEFT, and only you can do it
        Grant Accessibility to this exact binary:
          \(exe)
        System Settings → Privacy & Security → Accessibility
@@ -339,16 +397,18 @@ func runUninstall(purge: Bool) -> Int32 {
         print("   no \(zshrcPath)")
     }
 
-    print("3. binary")
-    // Only the copy a clone's install.sh puts here. A Homebrew-installed binary is
-    // brew's to remove, which is why that command is printed at the end.
-    let localBinary = home + "/.local/bin/stalker"
-    if fm.fileExists(atPath: localBinary) {
-        try? fm.removeItem(atPath: localBinary)
-        print("   removed \(localBinary)")
-    } else {
-        print("   nothing at \(localBinary)")
+    print("3. binaries")
+    // The agent's copy, and the one a clone's install.sh stages. A Homebrew-installed
+    // binary is brew's to remove, which is why that command is printed at the end.
+    for b in [paths.agentBinaryPath, home + "/.local/bin/stalker"] {
+        if fm.fileExists(atPath: b) {
+            try? fm.removeItem(atPath: b)
+            print("   removed \(b)")
+        }
     }
+    // The directory too, since nothing of the user's lives in it.
+    try? fm.removeItem(atPath: URL(fileURLWithPath: paths.agentBinaryPath)
+                        .deletingLastPathComponent().path)
 
     print("4. your data")
     if purge {

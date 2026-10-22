@@ -249,6 +249,19 @@ func runDoctor() -> Int32 {
              quietErrors: true).out.contains("stalker-dev"),
           "signing certificate exists", "run stalker setup")
 
+    // The agent runs its own copy at a fixed path, so that copy can lag the one an
+    // upgrade just installed. Spec §10 specifies this check for exactly that reason.
+    if fm.fileExists(atPath: paths.agentBinaryPath) {
+        let agentVersion = sh(paths.agentBinaryPath, ["--version"], quietErrors: true)
+            .out.trimmingCharacters(in: .whitespacesAndNewlines)
+        let want = "stalker \(stalkerVersion)"
+        check(agentVersion == want,
+              "the agent's binary is current (\(agentVersion))",
+              "this copy is \(agentVersion) but you are running \(want). Run stalker setup.")
+    } else {
+        check(false, "the agent's binary is installed", "run stalker setup")
+    }
+
     // An ad-hoc signature is why a granted Accessibility permission stops working
     // for no visible reason. Its designated requirement is the code hash, so TCC
     // pins the grant to one exact build; the next build is a different program to
@@ -345,6 +358,7 @@ stalker — local activity tracker
   stalker doctor     verify permissions and setup
   stalker setup      install the per-user wiring, safe to re-run
   stalker uninstall  undo setup, keeping your data unless --purge
+  stalker refresh    re-install the agent's binary after an upgrade
   stalker --version  print the version
 
 global:
@@ -369,6 +383,7 @@ case .note(let a):         status = runNote(a)
 case .doctor:              status = runDoctor()
 case .setup(let d):        status = runSetup(supportDirOverride: d)
 case .uninstall(let p):    status = runUninstall(purge: p)
+case .refresh:             status = runRefresh()
 case .version:
     print("stalker \(stalkerVersion)")
     status = 0

@@ -46,6 +46,28 @@ class Stalker < Formula
     pkgshare.install "scripts/stalker.sample.plist"
   end
 
+  # Re-install the copy of the binary the agent runs, so an upgrade repairs itself.
+  #
+  # The agent deliberately runs its own copy at a fixed path under the user's data
+  # directory, because a TCC Accessibility grant is keyed to the resolved real path
+  # and Homebrew's moves on every upgrade. Measured: a grant on
+  # /opt/homebrew/bin/stalker died on `brew upgrade` even though that path and the
+  # code signature were unchanged, because the symlink started pointing at
+  # Cellar/0.1.1 instead of Cellar/0.1.0.
+  #
+  # `refresh` only copies and re-signs that one file. It touches no launchd agent and
+  # raises no prompt, because the agent's path has not changed and the signing
+  # certificate already exists by the time an upgrade happens. So it is safe to run
+  # unattended, and it is why a user grants Accessibility once rather than once per
+  # upgrade. It exits zero even when there is nothing to do, so it cannot fail
+  # somebody's `brew upgrade`.
+  # must_succeed: false so this can never fail somebody's `brew upgrade`. `refresh`
+  # already exits zero when there is nothing to do, and this is the belt to that
+  # braces.
+  post_install_steps do
+    run "stalker", args: ["refresh"], base: :bin, must_succeed: false
+  end
+
   def caveats
     <<~EOS
       One step left, and it is not something a formula is allowed to do:
@@ -56,8 +78,10 @@ class Stalker < Formula
       the shell hook, and loads the background agent. It then tells you the one
       permission you have to grant by hand, and what this records before you do.
 
-      Safe to re-run, and re-running it is the fix for almost everything. After a
-      `brew upgrade`, run it again so the new binary gets signed.
+      Safe to re-run, and re-running it is the fix for almost everything.
+
+      You only have to grant that permission once, ever. Upgrades refresh
+      themselves, because the agent runs its own copy at a path that never moves.
     EOS
   end
 
