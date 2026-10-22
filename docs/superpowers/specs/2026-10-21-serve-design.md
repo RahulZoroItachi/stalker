@@ -44,7 +44,7 @@ Settled in conversation, with reasons, so they are not re-litigated.
 | Grid omission | a renderer decision | ANSI has no colour when piped. A browser always has colour, so HTML always draws it. |
 | Rules and notes caching | none, re-read per request | preserves "fix the file, fix the history" from §5 of the logging spec |
 | Page scripting | none at all | a Refresh link and `title` tooltips need no JavaScript. For a tool whose pitch is that data never leaves the machine, a script-free page is worth having. |
-| Agent labels | `stalker.sample` and `stalker.serve` | reverse-DNS and still the author's. The existing `stalker.sample` is renamed at the same time, so there is one namespace rather than two. Free to do now, while there is one installation to migrate. |
+| Agent labels | `stalker.sample` and `stalker.serve` | the tool's own name and nothing else. launchd recommends reverse-DNS but does not require it, and a borrowed domain for a tool that owns none says less than the plain name. The one pre-existing label is retired in the same change, so there is one namespace rather than two. Free to do now, while there is one installation to migrate. |
 | `doctor` on a missing agent | report with a hint, never bootstrap | matches every other check in `runDoctor`, and keeps `doctor` a diagnostic that does not change the system it inspects |
 
 ## 3. The view model
@@ -209,10 +209,11 @@ String building, no template engine, matching how the ANSI renderer works.
 - A second launchd plist, `stalker.serve`, beside the existing agent:
   `KeepAlive` true instead of `StartInterval`, plus `ThrottleInterval` so a bound
   port backs off rather than spinning.
-- The existing sampler agent is renamed from `stalker.sample` to
-  `stalker.sample` in the same change. `install.sh` already boots out the
-  old label before bootstrapping, so the switch costs nothing beyond one run. The
-  old label must be booted out explicitly, or two samplers run at once.
+- The existing sampler agent is renamed to `stalker.sample` in the same change.
+  `install.sh` boots the old label out and deletes its plist before bootstrapping,
+  so the switch costs nothing beyond one run. Both halves are load-bearing: a label
+  left registered keeps firing on its own schedule, and two samplers would then
+  write to one database.
 - `install.sh` installs both and prints the URL to bookmark.
 - `doctor` gains a check that the server is listening and answering, since it is now
   something that can be silently dead. It reports and hints, exactly as its other

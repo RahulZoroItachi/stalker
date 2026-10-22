@@ -61,6 +61,8 @@ fi
 echo "6. launchd agent"
 sed "s|__BINARY__|$BINARY|" "$REPO/scripts/stalker.sample.plist" > "$PLIST"
 plutil -lint "$PLIST"
+# Boot out before bootstrapping, or a re-run leaves the running agent in place and
+# a second one firing beside it, both writing to the same database.
 launchctl bootout "gui/$UID/stalker.sample" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$PLIST"
 echo "   loaded"
