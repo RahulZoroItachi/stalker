@@ -814,6 +814,35 @@ import StalkerMac
         t.expect(false, "installer is readable")
     }
 
+    // The formula's constraints are cheap to regress and expensive to discover on
+    // somebody else's Mac, so they are asserted here rather than trusted.
+    if let f = try? String(contentsOfFile: repo + "/packaging/stalker.rb", encoding: .utf8) {
+        // Assert on code, not prose, the same way the shell hook's test does. The
+        // formula's comments legitimately explain why there is no Xcode dependency,
+        // and a plain substring search cannot tell that from declaring one.
+        let formulaCode = f
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.hasPrefix("#") }
+            .joined(separator: "\n")
+
+        t.expect(!formulaCode.contains("depends_on xcode"), "no Xcode dependency is declared")
+        t.expect(formulaCode.contains("depends_on macos:"), "the macOS floor is declared")
+        t.expect(formulaCode.contains("--disable-sandbox"),
+                 "swift build runs with the sandbox off, or Homebrew's fights SwiftPM")
+        t.expect(!formulaCode.contains("bottle do"),
+                 "no bottle, which would be a prebuilt binary again")
+        t.expect(formulaCode.contains("stalker setup"),
+                 "the caveats tell the user the one remaining step")
+        t.expect(formulaCode.contains("head "),
+                 "a --HEAD install is offered, for friends tracking main")
+        for name in ["rules.toml.default", "stalker.zsh", "stalker.sample.plist"] {
+            t.expect(formulaCode.contains(name), "the formula installs \(name)")
+        }
+    } else {
+        t.expect(false, "formula is readable")
+    }
+
     // The hook must use only zsh builtins. A subprocess costs ~5 ms per command
     // instead of ~0.06 ms, which is felt at the prompt.
     if let hook = try? String(contentsOfFile: repo + "/scripts/stalker.zsh", encoding: .utf8) {
