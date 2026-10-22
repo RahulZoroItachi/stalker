@@ -4,4 +4,4 @@
 /// no version mechanism, and generating one would mean the Homebrew formula patching
 /// a source file during `install` — more moving parts than a constant that is wrong
 /// in exactly the same way a forgotten tag is. Spec §7.
-public let stalkerVersion = "0.1.0"
+public let stalkerVersion = "0.1.1"
