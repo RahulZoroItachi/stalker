@@ -134,12 +134,23 @@ private func installAgentBinary(from source: String) -> Bool {
     try? fm.createDirectory(atPath: URL(fileURLWithPath: dest).deletingLastPathComponent().path,
                             withIntermediateDirectories: true)
 
-    if source != dest {
+    // Resolve the source first. `copyItem` on a symlink copies the symlink, and
+    // Homebrew's bin entry is a *relative* symlink into the Cellar, so the
+    // destination became a dangling link pointing at a Cellar directory under the
+    // data directory. That defeats the whole point: the agent must run a real file.
+    let realSource = URL(fileURLWithPath: source).resolvingSymlinksInPath().path
+    if realSource != dest {
         try? fm.removeItem(atPath: dest)
-        guard (try? fm.copyItem(atPath: source, toPath: dest)) != nil else {
-            print("   could not copy \(source) to \(dest)")
+        guard (try? fm.copyItem(atPath: realSource, toPath: dest)) != nil else {
+            print("   could not copy \(realSource) to \(dest)")
             return false
         }
+    }
+    // A real file, not a link, or an upgrade would move what it points at.
+    let attrs = try? fm.attributesOfItem(atPath: dest)
+    guard (attrs?[.type] as? FileAttributeType) == .typeRegular else {
+        print("   \(dest) is not a regular file after copying from \(realSource)")
+        return false
     }
     guard sh("/usr/bin/codesign", ["-f", "-s", signIdentity, "-i", "stalker", dest]).status == 0
     else {
