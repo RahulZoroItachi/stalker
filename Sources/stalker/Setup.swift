@@ -191,5 +191,65 @@ func runSetup(supportDirOverride: String?) -> Int32 {
         print("   already sourced from ~/.zshrc")
     }
 
+    print("7. launchd agents")
+    let uid = getuid()
+    for agent in stalkerAgents {
+        let template = support + "/" + agent.templateName
+        guard let text = try? String(contentsOfFile: template, encoding: .utf8) else {
+            print("   could not read \(template)")
+            return 1
+        }
+        let dest = "\(home)/Library/LaunchAgents/\(agent.label).plist"
+        guard (try? renderPlist(template: text, binaryPath: exe)
+                .write(toFile: dest, atomically: true, encoding: .utf8)) != nil else {
+            print("   could not write \(dest)")
+            return 1
+        }
+        guard sh("/usr/bin/plutil", ["-lint", dest], quietErrors: true).status == 0 else {
+            print("   \(dest) is not a valid plist")
+            return 1
+        }
+        // Boot out before bootstrapping. A label left registered keeps firing on its
+        // own schedule, and two samplers would write to one database.
+        sh("/bin/launchctl", ["bootout", "gui/\(uid)/\(agent.label)"], quietErrors: true)
+        guard sh("/bin/launchctl", ["bootstrap", "gui/\(uid)", dest]).status == 0 else {
+            print("   could not load \(agent.label)")
+            return 1
+        }
+        print("   loaded \(agent.label) → \(exe)")
+    }
+
+    print("8. automation prompts")
+    // Each AppleScript target is a separate grant, and the first request for one
+    // prompts. Under launchd there is nobody to answer, so they are raised once from
+    // here, which is the same trick `doctor` already uses for Finder.
+    _ = FinderFolderProbe().folder()
+    let browser = BrowserAppleScriptProbe()
+    for id in browserBundleIds.sorted() { _ = browser.url(bundleId: id) }
+    print("   asked Finder and \(browserBundleIds.count) browsers once, so macOS prompts now")
+    print("   rather than silently refusing a background agent later")
+
+    print("""
+
+    9. ONE STEP LEFT, and only you can do it
+       Grant Accessibility to this exact binary:
+         \(exe)
+       System Settings → Privacy & Security → Accessibility
+
+       Without it, browsers still work through the AppleScript fallback, but apps
+       like Slack lose their context entirely.
+
+    What this records, so the permission above is an informed choice:
+       the frontmost app, plus a URL, working directory or window title, and
+       whether input is idle. Sampled every 30 seconds.
+    Where it goes:
+       one SQLite file at \(paths.dbPath), on this machine.
+    What never happens:
+       no network calls, no telemetry, no account, no upload.
+
+    Then:  stalker doctor
+    Out:   stalker uninstall
+    """)
+
     return 0
 }

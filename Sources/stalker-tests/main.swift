@@ -801,6 +801,19 @@ import StalkerMac
     t.expect(fm2.fileExists(atPath: repo + "/scripts/install.sh"), "installer exists")
     t.expect(fm2.fileExists(atPath: repo + "/scripts/rules.toml.default"), "default rules exist")
 
+    // install.sh is a build wrapper now: the per-user half lives in `stalker setup`,
+    // so it exists once rather than in two places that can disagree.
+    if let sh = try? String(contentsOfFile: repo + "/scripts/install.sh", encoding: .utf8) {
+        t.expect(sh.contains("swift build -c release"), "the wrapper still builds")
+        t.expect(sh.contains("stalker setup") || sh.contains("setup --support-dir"),
+                 "and delegates the per-user half to setup")
+        t.expect(!sh.contains("launchctl bootstrap"),
+                 "launchd wiring lives in setup now, not in two places")
+        t.expect(!sh.contains("openssl"), "and so does the certificate")
+    } else {
+        t.expect(false, "installer is readable")
+    }
+
     // The hook must use only zsh builtins. A subprocess costs ~5 ms per command
     // instead of ~0.06 ms, which is felt at the prompt.
     if let hook = try? String(contentsOfFile: repo + "/scripts/stalker.zsh", encoding: .utf8) {

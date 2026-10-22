@@ -217,6 +217,15 @@ func runDoctor() -> Int32 {
           "write \(paths.rulesPath)")
     check(loadRules() != nil, "rules file parses")
 
+    // An agent is something that can be silently dead, so it needs a check. Reported
+    // with a hint and never bootstrapped here: doctor diagnoses, it does not change
+    // the system it inspects.
+    for agent in stalkerAgents {
+        check(sh("/bin/launchctl", ["print", "gui/\(getuid())/\(agent.label)"],
+                 quietErrors: true).status == 0,
+              "launchd agent \(agent.label) is registered", "run stalker setup")
+    }
+
     check(SystemFocusProbe().frontmost() != nil, "focus probe works")
     check(SystemIdleProbe().inputIdleSeconds() >= 0, "idle probe works")
 
