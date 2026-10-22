@@ -830,11 +830,15 @@ import StalkerMac
     // One account name everywhere. The sweep that stripped identifying data before
     // this work replaced a bare first name, which corrupted it inside the account
     // handle in the spec — in the very section saying which repositories to create.
+    // Assembled rather than written out, so a literal text sweep over this
+    // repository cannot rewrite the very string this guards against and silently
+    // invert the assertion into one that is always false.
+    let wrongAccount = "Casey" + "ZoroItachi"
     for f in ["README.md", "packaging/stalker.rb",
               "docs/superpowers/specs/2026-10-21-distribution-design.md",
               "docs/superpowers/plans/2026-10-22-distribution.md"] {
         if let text = try? String(contentsOfFile: repo + "/" + f, encoding: .utf8) {
-            t.expect(!text.contains("RahulZoroItachi"), "\(f) names the real account")
+            t.expect(!text.contains(wrongAccount), "\(f) names the real account")
         }
     }
 
