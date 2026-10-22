@@ -10,6 +10,17 @@
 
 default = "unclear"
 
+# Activities you can log by hand with `stalker note`, for the parts of the day the
+# laptop cannot see. Without this line `stalker note` has nothing to accept and
+# refuses every entry, so a starter set ships here. Add your own freely. A name may
+# not contain "/", because the report reads that as a subcategory.
+activities = "sleep, workout, travel, reading, chores, social"
+
+# Of those, the ones that are rest rather than something chosen. Kept out of the main
+# denominator, because seven hours of sleep in it makes every other row a rounding
+# error.
+rest = "sleep"
+
 [[rule]]
 app = "com.google.Chrome"
 category = "work"

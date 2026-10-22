@@ -650,9 +650,16 @@ import StalkerMac
     let sysIdle = SystemIdleProbe()
     t.expect(sysIdle.inputIdleSeconds() >= 0, "idle probe returns a non-negative value")
 
+    // Reports the state, asserts the capability. Whether the screen happens to be
+    // locked is ambient machine state, not this program's behaviour, and asserting
+    // it made the suite fail whenever a screensaver activated mid-run — so it could
+    // never pass unattended. What is worth asserting is the thing the probe depends
+    // on: that the session dictionary is readable at all. Without it the probe
+    // returns its `false` default and a locked screen would look unlocked.
     let sysLock = SystemLockProbe()
-    let locked = sysLock.isScreenLocked()
-    t.eq(locked, false, "screen is not locked while the tests run")
+    t.expect(CGSessionCopyCurrentDictionary() != nil,
+             "lock probe can read the session dictionary "
+             + "(screen is currently \(sysLock.isScreenLocked() ? "locked" : "unlocked"))")
 
     do {
         let dir = NSTemporaryDirectory() + "stalker-probe-test-\(Int(Date().timeIntervalSince1970))"
@@ -814,6 +821,23 @@ import StalkerMac
         t.expect(false, "installer is readable")
     }
 
+    // The formula tells a friend the terms; the repository has to grant them.
+    t.expect(fm2.fileExists(atPath: repo + "/LICENSE"), "a license file exists")
+    if let lic = try? String(contentsOfFile: repo + "/LICENSE", encoding: .utf8) {
+        t.expect(lic.contains("MIT"), "and names MIT, which is what the formula declares")
+    }
+
+    // One account name everywhere. The sweep that stripped identifying data before
+    // this work replaced a bare first name, which corrupted it inside the account
+    // handle in the spec — in the very section saying which repositories to create.
+    for f in ["README.md", "packaging/stalker.rb",
+              "docs/superpowers/specs/2026-10-21-distribution-design.md",
+              "docs/superpowers/plans/2026-10-22-distribution.md"] {
+        if let text = try? String(contentsOfFile: repo + "/" + f, encoding: .utf8) {
+            t.expect(!text.contains("RahulZoroItachi"), "\(f) names the real account")
+        }
+    }
+
     // The formula's constraints are cheap to regress and expensive to discover on
     // somebody else's Mac, so they are asserted here rather than trusted.
     if let f = try? String(contentsOfFile: repo + "/packaging/stalker.rb", encoding: .utf8) {
@@ -852,6 +876,10 @@ import StalkerMac
         t.expect(r.contains("stalker uninstall"), "and the way out, which a trial needs")
         t.expect(r.contains("rules.toml"), "and the first thing to edit")
         t.expect(r.contains("Accessibility"), "the permission is named, not glossed")
+        // The "+" picker opens on /Applications and shows no CLI binaries, so
+        // naming the path is not enough to actually reach it.
+        t.expect(r.contains("Shift") || r.contains("⇧"),
+                 "and how to reach a CLI path in the picker, which opens on /Applications")
         t.expect(r.contains("14") || r.lowercased().contains("sonoma"),
                  "the macOS floor is stated")
 
@@ -863,10 +891,18 @@ import StalkerMac
             .map { $0.split(separator: " ", omittingEmptySubsequences: true).map(String.init) }
         if let tok = noteExample, let i = tok.firstIndex(of: "note"), tok.count > i + 2 {
             let range = tok[i + 1], activity = tok[i + 2]
+            // Against the SHIPPED defaults, not an injected set. Feeding the
+            // example's own activity name into `activities:` made this pass for any
+            // word at all, which hid that the default rules declared none and the
+            // documented command therefore failed on every fresh install.
+            let shipped = (try? String(contentsOfFile: repo + "/scripts/rules.toml.default",
+                                       encoding: .utf8))
+                .flatMap { try? parseRules($0, homeDirectory: "/Users/alex") }
             let parsed = try? parseNotes("2026-01-01  \(range)  \(activity)",
-                                         activities: Set([activity]),
+                                         activities: Set(shipped?.activities ?? []),
                                          timeZone: TimeZone(identifier: "UTC")!)
-            t.eq(parsed?.count, 1, "the readme's own `stalker note` example parses")
+            t.eq(parsed?.count, 1,
+                 "the readme's `stalker note` example works against the shipped rules")
         } else {
             t.expect(false, "the readme shows a `stalker note` example")
         }

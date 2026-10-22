@@ -16,21 +16,36 @@ public enum GrantVerdict: Equatable, Sendable {
 /// the agent is the thing that needs the grant, and its rows are the record of
 /// whether it had it. Spec §5.
 ///
-/// Only `.title` and `.file` count as proof. `.url` can come from the AppleScript
-/// fallback, `.cwd` from the shell courier and `.folder` from Finder, so none of them
-/// distinguishes a live grant from a working fallback.
+/// What counts as proof is narrower than it looks.
+///
+/// - `.title` always counts. The AppleScript fallback never invents one: it carries
+///   forward whatever the primary found, and a denied primary carries nothing.
+/// - `.file` counts only for a non-browser. For a browser it is ambiguous, because
+///   `FallbackContextProbe` reports a local file as `.file`, and that fallback runs
+///   *because* Accessibility was denied. Counting it would let doctor announce a
+///   grant that is not there, which is worse than the false failure this check
+///   replaced: a friend who refuses the permission and opens a local PDF in Chrome
+///   would be told everything was fine.
+/// - `.url` can come from the fallback, `.cwd` from the shell courier and `.folder`
+///   from Finder, so none of them distinguishes a live grant from a working fallback.
 public func accessibilityVerdict(_ intervals: [Interval], now: Int,
                                  window: Int = 86_400) -> GrantVerdict {
     let cutoff = now - window
     var lastDenied: Int?
     var lastGranted: Int?
-    for iv in intervals where iv.startedAt > cutoff {
+    // Filter on `endedAt`, matching the overlap query the caller fetched with. A run
+    // that began before the cutoff but is still recent is evidence, and this also
+    // makes `lastSeen` mean when context was last seen rather than when the run began.
+    for iv in intervals where iv.endedAt > cutoff {
+        let isBrowser = iv.bundleId.map(browserBundleIds.contains) ?? false
         switch iv.contextKind {
         case .denied:
-            lastDenied = max(lastDenied ?? iv.startedAt, iv.startedAt)
-        case .title, .file:
-            lastGranted = max(lastGranted ?? iv.startedAt, iv.startedAt)
-        case .url, .cwd, .folder, nil:
+            lastDenied = max(lastDenied ?? iv.endedAt, iv.endedAt)
+        case .title:
+            lastGranted = max(lastGranted ?? iv.endedAt, iv.endedAt)
+        case .file where !isBrowser:
+            lastGranted = max(lastGranted ?? iv.endedAt, iv.endedAt)
+        case .file, .url, .cwd, .folder, nil:
             continue
         }
     }

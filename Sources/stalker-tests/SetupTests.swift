@@ -80,6 +80,38 @@ import StalkerCore
     t.expect(supportDirCandidates(executablePath: "/x/bin/stalker").count >= 2,
              "more than one candidate is reported, for the error message")
 
+    // A hook is a `source` line and nothing else. Matching the bare filename ate
+    // the `if` of a guarded hook and left a dangling `fi`, which is a zsh parse
+    // error, and a parse error stops zsh reading the rest of the file — so every
+    // line below it silently stopped applying in every new shell.
+    let guarded = """
+    export A=1
+    if [[ -f "/old/scripts/stalker.zsh" ]]; then
+      source "/old/scripts/stalker.zsh"
+    fi
+    export B=2
+    """
+    let guardFixed = hookEdit(zshrc: guarded, hookPath: "/new/share/stalker.zsh")
+    t.expect(guardFixed.contents.contains("if [[ -f"), "a guard around the hook is left alone")
+    t.expect(guardFixed.contents.contains("fi"), "so its fi is never orphaned")
+    t.expect(guardFixed.contents.contains("export B=2"), "and what follows still applies")
+    t.expect(!guardFixed.contents.contains("source \"/old/"), "the old source line is gone")
+    t.expect(guardFixed.contents.contains("source \"/new/share/stalker.zsh\""),
+             "and ours is in")
+
+    // A line that merely names the file is not a hook.
+    let mentions = "alias edithook='vim ~/dotfiles/stalker.zsh'\n"
+    t.expect(hookEdit(zshrc: mentions, hookPath: "/new/share/stalker.zsh").contents
+               .contains("alias edithook="), "an unrelated line naming the file survives")
+    t.expect(!hookRemoval(mentions).changed, "and removal does not touch it")
+
+    // Anything naming the file that we chose not to edit is reported, so a guard
+    // that now guards nothing is visible rather than silently inert.
+    t.eq(foreignHookLines(guarded).count, 1, "the guard line is reported as foreign")
+    t.eq(foreignHookLines(mentions).count, 1, "so is an unrelated mention")
+    t.eq(foreignHookLines("source \"/x/stalker.zsh\"\n").count, 0,
+         "a plain hook is ours, not foreign")
+
     // A binary under .build is thrown away and relinked constantly, so pointing a
     // persistent launchd agent at one would silently degrade real tracking.
     t.expect(isTransientBuildPath("/repo/.build/arm64-apple-macosx/debug/stalker"),
@@ -90,6 +122,38 @@ import StalkerCore
              "an installed binary is not")
     t.expect(!isTransientBuildPath("/opt/homebrew/Cellar/stalker/0.1.0/bin/stalker"),
              "nor is a Homebrew one")
+
+    // Every path comes from one home, and nothing could override it, so the only way
+    // to exercise a command with side effects was against the author's real data.
+    // Setting HOME does not work: the code reads homeDirectoryForCurrentUser.
+    t.eq(extractHomeOverride(["doctor"]).home, nil, "no flag means the real home")
+    t.eq(extractHomeOverride(["doctor"]).args, ["doctor"], "and the args are untouched")
+    t.eq(extractHomeOverride(["--home", "/tmp/x", "doctor"]).home, "/tmp/x",
+         "a leading --home is picked up")
+    t.eq(extractHomeOverride(["--home", "/tmp/x", "doctor"]).args, ["doctor"],
+         "and removed, so the command parser never sees it")
+    t.eq(extractHomeOverride(["note", "09:00-10:00", "sleep", "--home", "/tmp/x"]).args,
+         ["note", "09:00-10:00", "sleep"], "it may come last too")
+    t.eq(extractHomeOverride(["--home"]).args, ["--home"],
+         "with no value it is left in place, so parsing refuses it")
+    t.eq(parseArgs(extractHomeOverride(["--home"]).args), Command.usageError,
+         "and refusing it is what happens")
+
+    // doctor must audit the binary the AGENT runs, which is recorded in the plist,
+    // not whichever copy happened to run doctor. With a Homebrew install beside an
+    // older ~/.local/bin one, those are different files and only one is signed.
+    let samplePlist = """
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/stalker</string>
+        <string>sample</string>
+    </array>
+    """
+    t.eq(agentProgramPath(plist: samplePlist), "/opt/homebrew/bin/stalker",
+         "the agent's program is read from its plist")
+    t.eq(agentProgramPath(plist: "<key>Label</key><string>x</string>"), nil,
+         "a plist with no ProgramArguments yields nil")
+    t.eq(agentProgramPath(plist: ""), nil, "and so does an empty one")
 
     // One agent today. serve adds the second without touching setup.
     t.eq(stalkerAgents.count, 1, "one agent is installed today")

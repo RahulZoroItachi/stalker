@@ -34,8 +34,30 @@ public struct FileEdit: Equatable, Sendable {
 }
 
 private let hookComment = "# stalker courier hook"
-/// Any line mentioning this is the hook, wherever it currently points.
+/// The file a hook sources, wherever it currently lives.
 private let hookMarker = "stalker.zsh"
+
+/// Is this line a hook, as opposed to a line that merely names the file?
+///
+/// Only a `source` (or `.`) line counts. Matching the bare filename was wrong twice
+/// over: it ate the `if` of a `[[ -f … ]]`-guarded hook and left a dangling `fi`,
+/// which is a zsh parse error that stops zsh reading the rest of the file, so every
+/// line below it silently stopped applying. And it deleted innocent lines like
+/// `alias edithook='vim ~/dotfiles/stalker.zsh'`.
+private func isHookSourceLine(_ line: String) -> Bool {
+    let t = line.trimmingCharacters(in: .whitespaces)
+    guard t.contains(hookMarker) else { return false }
+    return t.hasPrefix("source ") || t.hasPrefix(". ")
+}
+
+/// Lines that name the hook file but are not hook `source` lines.
+///
+/// Reported rather than edited. A guard left wrapped around a hook we removed now
+/// guards nothing, and a person should hear that from us instead of discovering it.
+public func foreignHookLines(_ zshrc: String) -> [String] {
+    zshrc.components(separatedBy: "\n")
+        .filter { $0.contains(hookMarker) && !isHookSourceLine($0) }
+}
 
 /// `~/.zshrc` with the courier hook sourcing `hookPath`.
 ///
@@ -68,7 +90,7 @@ public func hookRemoval(_ zshrc: String) -> FileEdit {
     // so a clone that moved made it append a second one rather than correct the
     // first, and anyone migrating from that state has two.
     var removedAny = false
-    while let i = lines.firstIndex(where: { $0.contains(hookMarker) }) {
+    while let i = lines.firstIndex(where: isHookSourceLine) {
         var from = i
         if from > 0, lines[from - 1] == hookComment { from -= 1 }
         if from > 0, lines[from - 1].isEmpty { from -= 1 }
@@ -120,4 +142,43 @@ public func resolveSupportDir(executablePath: String, override: String?,
 /// whose signature no longer satisfies the grant.
 public func isTransientBuildPath(_ path: String) -> Bool {
     path.components(separatedBy: "/").contains(".build")
+}
+
+/// The binary a launchd plist actually runs, read from `ProgramArguments[0]`.
+///
+/// `doctor` has to audit this rather than its own `Bundle.main`. Once a Homebrew
+/// install sits beside an older `~/.local/bin/stalker`, those are different files:
+/// whichever PATH resolves first is the one running `doctor`, while the plist may
+/// point at the other. Auditing the wrong one reports `ok` for drift it never looked
+/// at. Textual rather than `PropertyListSerialization`, matching how the rest of this
+/// package reads the formats it owns.
+public func agentProgramPath(plist: String) -> String? {
+    guard let keyEnd = plist.range(of: "<key>ProgramArguments</key>")?.upperBound,
+          let open = plist.range(of: "<string>", range: keyEnd..<plist.endIndex)?.upperBound,
+          let close = plist.range(of: "</string>", range: open..<plist.endIndex)?.lowerBound
+    else { return nil }
+    let path = plist[open..<close].trimmingCharacters(in: .whitespacesAndNewlines)
+    return path.isEmpty ? nil : path
+}
+
+/// Pull a global `--home PATH` out of the argument list.
+///
+/// Every path this program touches derives from one home directory, read from
+/// `homeDirectoryForCurrentUser`, which ignores the `HOME` environment variable. So
+/// before this there was no way to run `setup`, `uninstall` or `note` against
+/// anything but the real one, and the only way to verify them was to let them write
+/// to real data. That is not hypothetical: it put three junk entries in a real notes
+/// file during development.
+///
+/// Returned with the flag stripped, so the command parsers never see it. A `--home`
+/// with no value is left in place on purpose, so `parseArgs` refuses it rather than
+/// silently ignoring a typo.
+public func extractHomeOverride(_ args: [String]) -> (args: [String], home: String?) {
+    guard let i = args.firstIndex(of: "--home"), i + 1 < args.count else {
+        return (args, nil)
+    }
+    var rest = args
+    let value = rest[i + 1]
+    rest.removeSubrange(i...(i + 1))
+    return (rest, value)
 }

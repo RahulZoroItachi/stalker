@@ -3,7 +3,10 @@ import Foundation
 import StalkerCore
 import StalkerMac
 
-let home = FileManager.default.homeDirectoryForCurrentUser.path
+// `--home` is global rather than per-command, because it has to be resolved before
+// `paths` exists. See `extractHomeOverride`.
+let (cliArgs, homeOverride) = extractHomeOverride(Array(CommandLine.arguments.dropFirst()))
+let home = homeOverride ?? FileManager.default.homeDirectoryForCurrentUser.path
 let paths = Paths.standard(home: home)
 let config = TickConfig.default
 
@@ -251,7 +254,15 @@ func runDoctor() -> Int32 {
     // pins the grant to one exact build; the next build is a different program to
     // it, while the entry in System Settings still reads as enabled. A certificate
     // makes the requirement "identifier + leaf cert", which survives rebuilds.
-    if let exe = Bundle.main.executableURL?.path {
+    // The agent's binary, not this one. See `agentProgramPath`.
+    let auditTarget = stalkerAgents.lazy.compactMap { agent -> String? in
+        guard let text = try? String(
+            contentsOfFile: "\(home)/Library/LaunchAgents/\(agent.label).plist",
+            encoding: .utf8) else { return nil }
+        return agentProgramPath(plist: text)
+    }.first ?? Bundle.main.executableURL?.path
+    if let exe = auditTarget {
+        print("  ok   auditing the signature of \(exe)")
         let cs = Process()
         cs.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
         cs.arguments = ["-d", "-r-", exe]
@@ -336,6 +347,9 @@ stalker — local activity tracker
   stalker uninstall  undo setup, keeping your data unless --purge
   stalker --version  print the version
 
+global:
+  --home PATH        use a different home directory, for trying things out safely
+
 report options:
   --date YYYY-MM-DD  the day to report, or the week containing it
   --week             one row per day for the calendar week, Monday first
@@ -348,7 +362,7 @@ percentages describe what you did rather than how long the day was.
 """
 
 let status: Int32
-switch parseArgs(Array(CommandLine.arguments.dropFirst())) {
+switch parseArgs(cliArgs) {
 case .sample:              status = runSample()
 case .report(let r):       status = runReport(r)
 case .note(let a):         status = runNote(a)

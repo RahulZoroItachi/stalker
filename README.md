@@ -30,6 +30,11 @@ refuse it, browsers still work through a slower AppleScript fallback, but apps l
 Slack expose no usable AppleScript and lose their context entirely. You would still
 get a record of which apps you used, just not what you were doing in them.
 
+`stalker setup` prints the exact path to grant. One wrinkle worth knowing in
+advance: the "+" button in that pane opens a file picker on `/Applications`, and a
+command-line program is not there and is not visible by default. Press
+**Cmd+Shift+G**, paste the path `stalker setup` gave you, and press Return.
+
 You can take the grant back at any time, in System Settings, and `stalker uninstall`
 removes everything else.
 

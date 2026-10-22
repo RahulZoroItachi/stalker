@@ -177,18 +177,35 @@ func runSetup(supportDirOverride: String?) -> Int32 {
     }
 
     print("6. shell hook")
-    let zshrcPath = home + "/.zshrc"
+    // Resolve symlinks first. An atomic write replaces a symlink with a regular
+    // file, which would silently detach a stow/chezmoi/dotbot dotfile repo from the
+    // shell that was reading it.
+    let zshrcPath = URL(fileURLWithPath: home + "/.zshrc").resolvingSymlinksInPath().path
     let existing = try? String(contentsOfFile: zshrcPath, encoding: .utf8)
     let edit = hookEdit(zshrc: existing, hookPath: support + "/stalker.zsh")
     if edit.changed {
+        // The only edit this makes to a file it does not own, so it is the only one
+        // worth making reversible.
+        if let existing {
+            let backup = zshrcPath + ".stalker.bak"
+            if !fm.fileExists(atPath: backup),
+               (try? existing.write(toFile: backup, atomically: true, encoding: .utf8)) != nil {
+                print("   backed up your previous .zshrc to \(backup)")
+            }
+        }
         guard (try? edit.contents.write(toFile: zshrcPath, atomically: true, encoding: .utf8)) != nil
         else {
             print("   could not write \(zshrcPath)")
             return 1
         }
-        print("   added to ~/.zshrc, open a new terminal tab for it to take effect")
+        print("   added to \(zshrcPath), open a new terminal tab for it to take effect")
     } else {
-        print("   already sourced from ~/.zshrc")
+        print("   already sourced from \(zshrcPath)")
+    }
+    for line in foreignHookLines(edit.contents) {
+        print("   NOTE: left this line alone. It names the hook but does not source it,")
+        print("         so it may now refer to something that is no longer there:")
+        print("           \(line.trimmingCharacters(in: .whitespaces))")
     }
 
     print("7. launchd agents")
@@ -248,6 +265,10 @@ func runSetup(supportDirOverride: String?) -> Int32 {
          \(exe)
        System Settings → Privacy & Security → Accessibility
 
+       The "+" there opens a file picker on /Applications, and a command-line
+       program is not shown in it. Press Cmd+Shift+G, paste the path above,
+       press Return.
+
        Without it, browsers still work through the AppleScript fallback, but apps
        like Slack lose their context entirely.
 
@@ -288,17 +309,21 @@ func runUninstall(purge: Bool) -> Int32 {
     }
 
     print("2. shell hook")
-    let zshrcPath = home + "/.zshrc"
+    let zshrcPath = URL(fileURLWithPath: home + "/.zshrc").resolvingSymlinksInPath().path
     if let existing = try? String(contentsOfFile: zshrcPath, encoding: .utf8) {
         let edit = hookRemoval(existing)
-        if edit.changed,
-           (try? edit.contents.write(toFile: zshrcPath, atomically: true, encoding: .utf8)) != nil {
-            print("   removed from ~/.zshrc, it stops on your next new terminal tab")
+        // "nothing to remove" and "could not write" are different facts, and
+        // collapsing them reported a failed write as a clean uninstall.
+        if !edit.changed {
+            print("   no hook in \(zshrcPath)")
+        } else if (try? edit.contents.write(toFile: zshrcPath,
+                                            atomically: true, encoding: .utf8)) != nil {
+            print("   removed from \(zshrcPath), it stops on your next new terminal tab")
         } else {
-            print("   no hook in ~/.zshrc")
+            print("   COULD NOT write \(zshrcPath). The hook is still there, remove it by hand.")
         }
     } else {
-        print("   no ~/.zshrc")
+        print("   no \(zshrcPath)")
     }
 
     print("3. binary")
