@@ -14,7 +14,7 @@ class Stalker < Formula
   desc "Local activity tracker that never leaves your machine"
   homepage "https://github.com/RahulZoroItachi/stalker"
   url "https://github.com/RahulZoroItachi/stalker/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "REPLACE_WITH_TARBALL_SHA256"
+  sha256 "37c482bf220182dc9c48088370c0774d862878c8e1d259729e22f58bce1d85ec"
   license "MIT"
   head "https://github.com/RahulZoroItachi/stalker.git", branch: "main"
 
