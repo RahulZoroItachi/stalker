@@ -45,18 +45,16 @@ private let hookMarker = "stalker.zsh"
 /// one would fail silently on every prompt. A nil `zshrc` means no file yet, which is
 /// ordinary on a Mac that has never been customised.
 public func hookEdit(zshrc: String?, hookPath: String) -> FileEdit {
-    let wanted = "source \"\(hookPath)\""
+    let block = "\n\(hookComment)\n" + "source \"\(hookPath)\"" + "\n"
     guard let zshrc, !zshrc.isEmpty else {
-        return FileEdit(contents: "\n\(hookComment)\n\(wanted)\n", changed: true)
+        return FileEdit(contents: block, changed: true)
     }
-
-    var lines = zshrc.components(separatedBy: "\n")
-    guard let i = lines.firstIndex(where: { $0.contains(hookMarker) }) else {
-        return FileEdit(contents: zshrc + "\n\(hookComment)\n\(wanted)\n", changed: true)
-    }
-    if lines[i] == wanted { return FileEdit(contents: zshrc, changed: false) }
-    lines[i] = wanted
-    return FileEdit(contents: lines.joined(separator: "\n"), changed: true)
+    // Strip every hook first, then write exactly one. Fixing only the first would
+    // leave a second behind on a file the old installer had already appended to,
+    // and a hook pointing at a file that no longer exists makes zsh complain on
+    // every new shell.
+    let desired = hookRemoval(zshrc).contents + block
+    return FileEdit(contents: desired, changed: desired != zshrc)
 }
 
 /// `~/.zshrc` with the courier hook taken out, comment and all.
@@ -66,13 +64,18 @@ public func hookEdit(zshrc: String?, hookPath: String) -> FileEdit {
 /// uninstaller.
 public func hookRemoval(_ zshrc: String) -> FileEdit {
     var lines = zshrc.components(separatedBy: "\n")
-    guard let i = lines.firstIndex(where: { $0.contains(hookMarker) }) else {
-        return FileEdit(contents: zshrc, changed: false)
+    // Every hook, not just the first. The old installer matched on the whole line,
+    // so a clone that moved made it append a second one rather than correct the
+    // first, and anyone migrating from that state has two.
+    var removedAny = false
+    while let i = lines.firstIndex(where: { $0.contains(hookMarker) }) {
+        var from = i
+        if from > 0, lines[from - 1] == hookComment { from -= 1 }
+        if from > 0, lines[from - 1].isEmpty { from -= 1 }
+        lines.removeSubrange(from...i)
+        removedAny = true
     }
-    var from = i
-    if from > 0, lines[from - 1] == hookComment { from -= 1 }
-    if from > 0, lines[from - 1].isEmpty { from -= 1 }
-    lines.removeSubrange(from...i)
+    guard removedAny else { return FileEdit(contents: zshrc, changed: false) }
     return FileEdit(contents: lines.joined(separator: "\n"), changed: true)
 }
 
@@ -106,4 +109,15 @@ public func resolveSupportDir(executablePath: String, override: String?,
                               exists: (String) -> Bool) -> String? {
     if let override { return override }
     return supportDirCandidates(executablePath: executablePath).first(where: exists)
+}
+
+/// Whether this binary is a build artefact rather than an installed program.
+///
+/// SwiftPM rebuilds and relinks anything under `.build` constantly, and a relink
+/// drops the code signature that TCC grants depend on. `swift package clean` deletes
+/// it outright. So a launchd agent pointed at such a path degrades silently: the
+/// agent keeps being registered, and either stops finding its binary or finds one
+/// whose signature no longer satisfies the grant.
+public func isTransientBuildPath(_ path: String) -> Bool {
+    path.components(separatedBy: "/").contains(".build")
 }

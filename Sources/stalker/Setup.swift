@@ -192,6 +192,18 @@ func runSetup(supportDirOverride: String?) -> Int32 {
     }
 
     print("7. launchd agents")
+    guard !isTransientBuildPath(exe) else {
+        // Deliberately not an error: everything above this point was useful, and a
+        // developer running `swift run stalker setup` wants to exercise it. What they
+        // do not want is their real agent repointed at a binary that relinks on the
+        // next build and vanishes on the next clean.
+        print("   SKIPPED. This binary lives under .build, so it is a build artefact:")
+        print("     \(exe)")
+        print("   Pointing the agent here would break your tracking the next time you")
+        print("   rebuilt. Run ./scripts/install.sh instead, which installs the binary")
+        print("   first and then wires the agent to the installed copy.")
+        return 0
+    }
     let uid = getuid()
     for agent in stalkerAgents {
         let template = support + "/" + agent.templateName

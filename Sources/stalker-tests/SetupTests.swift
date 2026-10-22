@@ -36,6 +36,25 @@ import StalkerCore
     t.expect(removed.contents.contains("alias ll='ls -l'"), "other lines survive removal")
     t.expect(!hookRemoval("export EDITOR=vim\n").changed, "removing an absent hook is no change")
 
+    // The old installer matched the whole line, so a clone that moved made it append
+    // a second hook rather than fix the first. Anyone migrating from that state has
+    // two, and a stale one errors on every shell start.
+    let twoHooks = """
+    export EDITOR=vim
+    # stalker courier hook
+    source "/old/one/scripts/stalker.zsh"
+    # stalker courier hook
+    source "/old/two/scripts/stalker.zsh"
+    alias ll='ls -l'
+    """
+    let collapsed = hookEdit(zshrc: twoHooks, hookPath: "/new/share/stalker.zsh")
+    t.eq(collapsed.contents.components(separatedBy: "stalker.zsh").count - 1, 1,
+         "two stale hooks collapse to one correct hook")
+    t.expect(!collapsed.contents.contains("/old/"), "with no stale path left behind")
+    let bothGone = hookRemoval(twoHooks)
+    t.expect(!bothGone.contents.contains("stalker.zsh"), "and removal takes both out")
+    t.expect(bothGone.contents.contains("alias ll='ls -l'"), "leaving everything else")
+
     // The plist template carries a placeholder the installer fills in.
     let plist = renderPlist(template: "<string>__BINARY__</string>", binaryPath: "/opt/bin/stalker")
     t.eq(plist, "<string>/opt/bin/stalker</string>", "the binary path is substituted")
@@ -60,6 +79,17 @@ import StalkerCore
          nil, "nothing found is nil, never a silent default")
     t.expect(supportDirCandidates(executablePath: "/x/bin/stalker").count >= 2,
              "more than one candidate is reported, for the error message")
+
+    // A binary under .build is thrown away and relinked constantly, so pointing a
+    // persistent launchd agent at one would silently degrade real tracking.
+    t.expect(isTransientBuildPath("/repo/.build/arm64-apple-macosx/debug/stalker"),
+             "a debug build is transient")
+    t.expect(isTransientBuildPath("/repo/.build/release/stalker"),
+             "so is a release build inside .build")
+    t.expect(!isTransientBuildPath("/Users/me/.local/bin/stalker"),
+             "an installed binary is not")
+    t.expect(!isTransientBuildPath("/opt/homebrew/Cellar/stalker/0.1.0/bin/stalker"),
+             "nor is a Homebrew one")
 
     // One agent today. serve adds the second without touching setup.
     t.eq(stalkerAgents.count, 1, "one agent is installed today")
