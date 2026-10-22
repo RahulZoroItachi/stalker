@@ -843,6 +843,37 @@ import StalkerMac
         t.expect(false, "formula is readable")
     }
 
+    // A readme that drifts from the commands that exist is the regression worth
+    // catching, since it is the only thing a friend reads before granting anything.
+    if let r = try? String(contentsOfFile: repo + "/README.md", encoding: .utf8) {
+        t.expect(r.contains("brew install RahulZoroItachi/stalker/stalker"),
+                 "the install command is given")
+        t.expect(r.contains("stalker setup"), "and the second step")
+        t.expect(r.contains("stalker uninstall"), "and the way out, which a trial needs")
+        t.expect(r.contains("rules.toml"), "and the first thing to edit")
+        t.expect(r.contains("Accessibility"), "the permission is named, not glossed")
+        t.expect(r.contains("14") || r.lowercased().contains("sonoma"),
+                 "the macOS floor is stated")
+
+        // A documented command that the product refuses is worse than an
+        // undocumented one, so the readme's own example is run through the real
+        // parser rather than eyeballed.
+        let noteExample = r.split(separator: "\n", omittingEmptySubsequences: false)
+            .first { $0.contains("stalker note ") }
+            .map { $0.split(separator: " ", omittingEmptySubsequences: true).map(String.init) }
+        if let tok = noteExample, let i = tok.firstIndex(of: "note"), tok.count > i + 2 {
+            let range = tok[i + 1], activity = tok[i + 2]
+            let parsed = try? parseNotes("2026-01-01  \(range)  \(activity)",
+                                         activities: Set([activity]),
+                                         timeZone: TimeZone(identifier: "UTC")!)
+            t.eq(parsed?.count, 1, "the readme's own `stalker note` example parses")
+        } else {
+            t.expect(false, "the readme shows a `stalker note` example")
+        }
+    } else {
+        t.expect(false, "readme is readable")
+    }
+
     // The hook must use only zsh builtins. A subprocess costs ~5 ms per command
     // instead of ~0.06 ms, which is felt at the prompt.
     if let hook = try? String(contentsOfFile: repo + "/scripts/stalker.zsh", encoding: .utf8) {
