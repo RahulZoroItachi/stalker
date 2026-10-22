@@ -112,6 +112,36 @@ import StalkerCore
     t.eq(foreignHookLines("source \"/x/stalker.zsh\"\n").count, 0,
          "a plain hook is ours, not foreign")
 
+    // A Cellar path carries the version, and `brew cleanup` deletes old version
+    // directories. An agent pointed there stops finding its binary, and a shell hook
+    // sourced from there errors on every new terminal. Spec §10 names the stable
+    // `opt` path as the one to use, so a Cellar path is rewritten to it.
+    t.eq(canonicalBrewPath("/opt/homebrew/Cellar/stalker/0.1.0/bin/stalker"),
+         "/opt/homebrew/opt/stalker/bin/stalker", "a Cellar path becomes the opt path")
+    t.eq(canonicalBrewPath("/usr/local/Cellar/stalker/0.2.3/bin/stalker"),
+         "/usr/local/opt/stalker/bin/stalker", "including on an Intel prefix")
+    t.eq(canonicalBrewPath("/opt/homebrew/bin/stalker"), "/opt/homebrew/bin/stalker",
+         "the brew bin symlink is already stable, so it is left alone")
+    t.eq(canonicalBrewPath("/Users/me/.local/bin/stalker"), "/Users/me/.local/bin/stalker",
+         "and a hand-installed path is untouched")
+    t.eq(canonicalBrewPath("/repo/.build/debug/stalker"), "/repo/.build/debug/stalker",
+         "as is a build artefact")
+    t.eq(canonicalBrewPath("/opt/homebrew/Cellar"), "/opt/homebrew/Cellar",
+         "a truncated Cellar path is not mangled")
+
+    // Canonicalising must never make setup fail. `opt/<formula>` is created by
+    // Homebrew on install, but an unlinked formula has none, and refusing to run is
+    // worse than using the version-pinned path we would otherwise have used anyway.
+    t.eq(stableBinaryPath("/opt/homebrew/Cellar/stalker/0.1.0/bin/stalker",
+                          exists: { $0 == "/opt/homebrew/opt/stalker/bin/stalker" }),
+         "/opt/homebrew/opt/stalker/bin/stalker", "the stable path is used when it is there")
+    t.eq(stableBinaryPath("/opt/homebrew/Cellar/stalker/0.1.0/bin/stalker",
+                          exists: { _ in false }),
+         "/opt/homebrew/Cellar/stalker/0.1.0/bin/stalker",
+         "and the original stands when it is not")
+    t.eq(stableBinaryPath("/Users/me/.local/bin/stalker", exists: { _ in true }),
+         "/Users/me/.local/bin/stalker", "a non-brew path is returned unchanged")
+
     // A binary under .build is thrown away and relinked constantly, so pointing a
     // persistent launchd agent at one would silently degrade real tracking.
     t.expect(isTransientBuildPath("/repo/.build/arm64-apple-macosx/debug/stalker"),

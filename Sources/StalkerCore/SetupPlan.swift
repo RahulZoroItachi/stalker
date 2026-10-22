@@ -182,3 +182,37 @@ public func extractHomeOverride(_ args: [String]) -> (args: [String], home: Stri
     rest.removeSubrange(i...(i + 1))
     return (rest, value)
 }
+
+/// Rewrite a Homebrew Cellar path to the stable `opt` path that points at it.
+///
+/// `…/Cellar/stalker/0.1.0/bin/stalker` carries the version, and `brew cleanup`
+/// deletes old version directories. A launchd agent pointed there stops finding its
+/// binary, and a `~/.zshrc` hook sourced from alongside it errors on every new
+/// terminal. `…/opt/stalker/bin/stalker` is a symlink Homebrew re-points on every
+/// upgrade, so it survives both.
+///
+/// This is the path spec §10 names as the primary specification, and reaching it by
+/// decision rather than by luck is also what makes §10's eventual experiment answer
+/// the question it actually poses. `Bundle.main.executableURL` does not resolve
+/// symlinks — verified — so an invocation through a Cellar path arrives here as one.
+public func canonicalBrewPath(_ path: String, formula: String = "stalker") -> String {
+    var parts = path.components(separatedBy: "/")
+    guard let i = parts.firstIndex(of: "Cellar"), i + 2 < parts.count else { return path }
+    // Replace "Cellar/<formula>/<version>" with "opt/<formula>", keeping the rest.
+    parts.replaceSubrange(i...(i + 2), with: ["opt", parts[i + 1]])
+    return parts.joined(separator: "/")
+}
+
+/// The path to sign and to point the agent at: canonical when it is reachable, the
+/// original when it is not.
+///
+/// `canonicalBrewPath` rewrites a Cellar path to the `opt` symlink beside it, which
+/// Homebrew creates on install. An unlinked formula has no such symlink, and in that
+/// state signing the canonical path fails and `setup` would refuse to run at all.
+/// Falling back costs only the version-pinning the rewrite exists to avoid, which is
+/// exactly where we would have been without it.
+public func stableBinaryPath(_ path: String, exists: (String) -> Bool) -> String {
+    let canonical = canonicalBrewPath(path)
+    guard canonical != path else { return path }
+    return exists(canonical) ? canonical : path
+}

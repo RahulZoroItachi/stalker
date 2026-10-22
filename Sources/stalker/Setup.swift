@@ -125,7 +125,11 @@ private func ensureSigningCertificate() -> Bool {
 /// re-run, and re-running it is the documented repair for almost everything. Spec §4.
 func runSetup(supportDirOverride: String?) -> Int32 {
     let fm = FileManager.default
-    let exe = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+    // Canonicalised, so a Cellar invocation cannot pin the agent and the shell hook
+    // to a version directory `brew cleanup` will delete, and with a fallback so that
+    // an unlinked formula still installs. See `stableBinaryPath`.
+    let exe = stableBinaryPath(Bundle.main.executableURL?.path ?? CommandLine.arguments[0],
+                               exists: { fm.fileExists(atPath: $0) })
 
     print("stalker setup")
 

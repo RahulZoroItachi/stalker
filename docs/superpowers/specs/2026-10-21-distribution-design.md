@@ -243,6 +243,16 @@ The primary specification is `/opt/homebrew/opt/stalker/bin/stalker`, the stable
 per-formula symlink, which does not change between versions even though the Cellar
 path behind it does. The grant is given to that path and the agent runs that path.
 
+**Implemented, and by decision rather than by luck.** `Bundle.main.executableURL`
+does not resolve symlinks, which was verified: a binary invoked through a symlink
+reports the symlink's own path. So typing `stalker` happens to arrive at
+`/opt/homebrew/bin/stalker`, which is stable, but an invocation through a Cellar path
+would have arrived as one and pinned both the agent and the `~/.zshrc` hook to a
+version directory `brew cleanup` deletes. `setup` therefore rewrites a Cellar path to
+the `opt` path (`canonicalBrewPath`), falling back to the original when
+`opt/<formula>` is absent, as it is for an unlinked formula (`stableBinaryPath`).
+Both branches were exercised against a simulated Cellar layout.
+
 This could not be tested in the design conversation. Reading the TCC database needs
 Full Disk Access, and the obvious shortcut of granting a binary and re-running it
 from a new path does not work, because a shell-launched check reports on the
