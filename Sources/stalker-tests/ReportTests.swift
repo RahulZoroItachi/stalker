@@ -720,6 +720,13 @@ private func timelineRows(_ text: String) -> [String] {
     t.eq(parseArgs(["doctor"]), Command.doctor, "doctor is unaffected")
     t.eq(parseArgs([]), Command.help, "no arguments is help")
 
+    // --- Task 1: the version, so a friend's bug report can be placed ---
+    t.eq(parseArgs(["--version"]), Command.version, "--version is its own command")
+    t.eq(parseArgs(["version"]), Command.version, "the bare word works too")
+    t.expect(!stalkerVersion.isEmpty, "a version string is defined")
+    t.expect(stalkerVersion.split(separator: ".").count == 3,
+             "the version is three dot-separated parts")
+
     // --- the new spans ---
     t.eq(req(["report", "--week"])?.span, ReportRequest.Span.week, "--week selects the week view")
     t.eq(req(["report", "--week", "--date", "2026-09-30"])?.date, "2026-09-30",

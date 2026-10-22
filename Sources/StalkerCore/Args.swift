@@ -31,6 +31,9 @@ public enum Command: Equatable, Sendable {
     case report(ReportRequest)
     case note(NoteAction)
     case doctor
+    /// The version, so a report from someone else's machine can be placed against
+    /// a build. A success, like `help`.
+    case version
     /// Usage was asked for. A success.
     case help
     /// Arguments were malformed. Distinct from `help` so the process can exit
@@ -46,6 +49,7 @@ public func parseArgs(_ args: [String]) -> Command {
     case "doctor": return .doctor
     case "report": return parseReport(Array(args.dropFirst()))
     case "note": return parseNote(Array(args.dropFirst()))
+    case "version", "--version": return .version
     case "help", "--help", "-h": return .help
     default: return .usageError
     }
