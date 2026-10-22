@@ -129,6 +129,23 @@ import StalkerCore
     t.eq(canonicalBrewPath("/opt/homebrew/Cellar"), "/opt/homebrew/Cellar",
          "a truncated Cellar path is not mangled")
 
+    // A launchd label and an Automation grant are machine-global, not per-home. So a
+    // run against an overridden home must not touch either: bootstrapping an agent
+    // would hijack the real one. That is not hypothetical. It happened, pointing the
+    // live agent at a plist in /tmp that was then deleted, and real sampling stopped
+    // for five minutes.
+    t.expect(shouldTouchMachineState(homeOverride: nil, executablePath: "/usr/local/bin/stalker"),
+             "a normal install wires up the agent")
+    t.expect(!shouldTouchMachineState(homeOverride: "/tmp/x",
+                                      executablePath: "/usr/local/bin/stalker"),
+             "an overridden home never touches machine-global state")
+    t.expect(!shouldTouchMachineState(homeOverride: nil,
+                                      executablePath: "/repo/.build/debug/stalker"),
+             "and neither does a build artefact")
+    t.expect(!shouldTouchMachineState(homeOverride: "/tmp/x",
+                                      executablePath: "/repo/.build/debug/stalker"),
+             "both reasons at once is still a no")
+
     // Canonicalising must never make setup fail. `opt/<formula>` is created by
     // Homebrew on install, but an unlinked formula has none, and refusing to run is
     // worse than using the version-pinned path we would otherwise have used anyway.

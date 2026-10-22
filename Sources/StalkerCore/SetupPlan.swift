@@ -216,3 +216,19 @@ public func stableBinaryPath(_ path: String, exists: (String) -> Bool) -> String
     guard canonical != path else { return path }
     return exists(canonical) ? canonical : path
 }
+
+/// May this run register launchd agents and raise Automation prompts?
+///
+/// Both are keyed per-user by the system, not per-home-directory. `--home` can
+/// redirect every file this program writes, but it cannot give a run its own launchd
+/// namespace: `launchctl bootout gui/<uid>/stalker.sample` unregisters *the* agent,
+/// whichever home asked. So a run with an overridden home that wired up an agent
+/// would silently hijack the real one, and that is exactly what happened once: the
+/// live agent was repointed at a plist under /tmp which was then deleted, and
+/// sampling stopped until someone noticed.
+///
+/// A binary under `.build` is excluded for the separate reason in
+/// `isTransientBuildPath`.
+public func shouldTouchMachineState(homeOverride: String?, executablePath: String) -> Bool {
+    homeOverride == nil && !isTransientBuildPath(executablePath)
+}

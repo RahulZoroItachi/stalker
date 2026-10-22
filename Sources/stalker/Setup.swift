@@ -213,7 +213,12 @@ func runSetup(supportDirOverride: String?) -> Int32 {
     }
 
     print("7. launchd agents")
-    guard !isTransientBuildPath(exe) else {
+    let wiring = shouldTouchMachineState(homeOverride: homeOverride, executablePath: exe)
+    if homeOverride != nil {
+        print("   SKIPPED. --home was given. A launchd label is keyed per-user by the")
+        print("   system, not per-home, so bootstrapping one from here would unregister")
+        print("   and replace the real agent rather than a copy of it.")
+    } else if isTransientBuildPath(exe) {
         // Deliberately not an error: everything above this point was useful, and a
         // developer running `swift run stalker setup` wants to exercise it. What they
         // do not want is their real agent repointed at a binary that relinks on the
@@ -223,10 +228,9 @@ func runSetup(supportDirOverride: String?) -> Int32 {
         print("   Pointing the agent here would break your tracking the next time you")
         print("   rebuilt. Run ./scripts/install.sh instead, which installs the binary")
         print("   first and then wires the agent to the installed copy.")
-        return 0
     }
     let uid = getuid()
-    for agent in stalkerAgents {
+    for agent in stalkerAgents where wiring {
         let template = support + "/" + agent.templateName
         guard let text = try? String(contentsOfFile: template, encoding: .utf8) else {
             print("   could not read \(template)")
@@ -253,14 +257,19 @@ func runSetup(supportDirOverride: String?) -> Int32 {
     }
 
     print("8. automation prompts")
-    // Each AppleScript target is a separate grant, and the first request for one
-    // prompts. Under launchd there is nobody to answer, so they are raised once from
-    // here, which is the same trick `doctor` already uses for Finder.
-    _ = FinderFolderProbe().folder()
-    let browser = BrowserAppleScriptProbe()
-    for id in browserBundleIds.sorted() { _ = browser.url(bundleId: id) }
-    print("   asked Finder and \(browserBundleIds.count) browsers once, so macOS prompts now")
-    print("   rather than silently refusing a background agent later")
+    if wiring {
+        // Each AppleScript target is a separate grant, and the first request for one
+        // prompts. Under launchd there is nobody to answer, so they are raised once
+        // from here, which is the same trick `doctor` already uses for Finder.
+        _ = FinderFolderProbe().folder()
+        let browser = BrowserAppleScriptProbe()
+        for id in browserBundleIds.sorted() { _ = browser.url(bundleId: id) }
+        print("   asked Finder and \(browserBundleIds.count) browsers once, so macOS prompts now")
+        print("   rather than silently refusing a background agent later")
+    } else {
+        // Automation grants are per-user too, so a trial run must not spend them.
+        print("   SKIPPED, for the same reason as the agent above.")
+    }
 
     print("""
 
