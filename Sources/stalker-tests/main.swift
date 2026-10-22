@@ -1250,6 +1250,7 @@ import StalkerMac
     weekViewWithNotesTests(t)
     noteCommandTests(t)
     grantTests(t)
+    setupTests(t)
     gridTests(t)
     gridRenderTests(t)
 
