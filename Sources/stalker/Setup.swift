@@ -128,6 +128,12 @@ private func installAgentBinary(from source: String) -> Bool {
     let fm = FileManager.default
     let dest = paths.agentBinaryPath
 
+    // Create the directory here rather than relying on the caller. `refresh` runs on
+    // the upgrade path, where `setup` may never have run with this layout, and a copy
+    // into a directory that does not exist fails for a reason no one would guess.
+    try? fm.createDirectory(atPath: URL(fileURLWithPath: dest).deletingLastPathComponent().path,
+                            withIntermediateDirectories: true)
+
     if source != dest {
         try? fm.removeItem(atPath: dest)
         guard (try? fm.copyItem(atPath: source, toPath: dest)) != nil else {

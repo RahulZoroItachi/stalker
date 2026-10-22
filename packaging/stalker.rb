@@ -65,7 +65,7 @@ class Stalker < Formula
   # already exits zero when there is nothing to do, and this is the belt to that
   # braces.
   post_install_steps do
-    run "stalker", args: ["refresh"], base: :bin, must_succeed: false
+    run "stalker", args: ["refresh"], base: :bin, must_succeed: false, print_stdout: true
   end
 
   def caveats
