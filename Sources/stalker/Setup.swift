@@ -253,3 +253,77 @@ func runSetup(supportDirOverride: String?) -> Int32 {
 
     return 0
 }
+
+/// Undo what `setup` did.
+///
+/// A trial needs a visible way out, or people decline the trial. Spec §6.
+///
+/// Nothing here treats a missing file as an error: uninstall has to work on a
+/// half-finished install, which is exactly the state someone is in when they have
+/// decided to give up on it.
+func runUninstall(purge: Bool) -> Int32 {
+    let fm = FileManager.default
+    let uid = getuid()
+
+    print("stalker uninstall")
+
+    print("1. launchd agents")
+    for agent in stalkerAgents {
+        sh("/bin/launchctl", ["bootout", "gui/\(uid)/\(agent.label)"], quietErrors: true)
+        let plist = "\(home)/Library/LaunchAgents/\(agent.label).plist"
+        try? fm.removeItem(atPath: plist)
+        print("   removed \(agent.label)")
+    }
+
+    print("2. shell hook")
+    let zshrcPath = home + "/.zshrc"
+    if let existing = try? String(contentsOfFile: zshrcPath, encoding: .utf8) {
+        let edit = hookRemoval(existing)
+        if edit.changed,
+           (try? edit.contents.write(toFile: zshrcPath, atomically: true, encoding: .utf8)) != nil {
+            print("   removed from ~/.zshrc, it stops on your next new terminal tab")
+        } else {
+            print("   no hook in ~/.zshrc")
+        }
+    } else {
+        print("   no ~/.zshrc")
+    }
+
+    print("3. binary")
+    // Only the copy a clone's install.sh puts here. A Homebrew-installed binary is
+    // brew's to remove, which is why that command is printed at the end.
+    let localBinary = home + "/.local/bin/stalker"
+    if fm.fileExists(atPath: localBinary) {
+        try? fm.removeItem(atPath: localBinary)
+        print("   removed \(localBinary)")
+    } else {
+        print("   nothing at \(localBinary)")
+    }
+
+    print("4. your data")
+    if purge {
+        try? fm.removeItem(atPath: paths.dataDir)
+        try? fm.removeItem(atPath: paths.rulesPath)
+        try? fm.removeItem(atPath: paths.notesPath)
+        print("   deleted, as --purge asked")
+    } else {
+        // Both are hand-earned: weeks of history, and a rules file someone tuned.
+        // Neither is an installer's to throw away without being told to.
+        print("   kept. Your history is at \(paths.dbPath)")
+        print("   kept. Your rules are at \(paths.rulesPath)")
+        print("   pass --purge to delete them too")
+    }
+
+    // The certificate stays. Removing it needs a keychain prompt to achieve nothing,
+    // since it signs only this one binary for this one user.
+    print("""
+
+    TWO THINGS THIS CANNOT DO FOR YOU
+      If you installed through Homebrew:
+        brew uninstall stalker
+      Nothing but a person can revoke a TCC grant, so to take the entry back out:
+        System Settings → Privacy & Security → Accessibility
+    """)
+
+    return 0
+}

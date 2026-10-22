@@ -333,6 +333,7 @@ stalker — local activity tracker
   stalker note       log a block of time the laptop could not see
   stalker doctor     verify permissions and setup
   stalker setup      install the per-user wiring, safe to re-run
+  stalker uninstall  undo setup, keeping your data unless --purge
   stalker --version  print the version
 
 report options:
@@ -353,6 +354,7 @@ case .report(let r):       status = runReport(r)
 case .note(let a):         status = runNote(a)
 case .doctor:              status = runDoctor()
 case .setup(let d):        status = runSetup(supportDirOverride: d)
+case .uninstall(let p):    status = runUninstall(purge: p)
 case .version:
     print("stalker \(stalkerVersion)")
     status = 0

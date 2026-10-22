@@ -34,6 +34,9 @@ public enum Command: Equatable, Sendable {
     /// Per-user wiring a Homebrew formula is not allowed to do: the signing
     /// certificate, the shell hook, and the launchd agents. Spec §4.
     case setup(supportDir: String?)
+    /// Undo what `setup` did. The database and the rules file survive unless
+    /// `purge`, because a trial needs an exit that is not also a deletion.
+    case uninstall(purge: Bool)
     /// The version, so a report from someone else's machine can be placed against
     /// a build. A success, like `help`.
     case version
@@ -53,6 +56,7 @@ public func parseArgs(_ args: [String]) -> Command {
     case "report": return parseReport(Array(args.dropFirst()))
     case "note": return parseNote(Array(args.dropFirst()))
     case "setup": return parseSetup(Array(args.dropFirst()))
+    case "uninstall": return parseUninstall(Array(args.dropFirst()))
     case "version", "--version": return .version
     case "help", "--help", "-h": return .help
     default: return .usageError
@@ -80,6 +84,19 @@ private func parseSetup(_ args: [String]) -> Command {
         i += 1
     }
     return .setup(supportDir: dir)
+}
+
+/// The one flag `uninstall` takes.
+///
+/// Deleting someone's history is the only unrecoverable thing here, so it needs
+/// saying out loud rather than being the default.
+private func parseUninstall(_ args: [String]) -> Command {
+    var purge = false
+    for a in args {
+        guard a == "--purge" else { return .usageError }
+        purge = true
+    }
+    return .uninstall(purge: purge)
 }
 
 /// Flags for `report`, in any order.

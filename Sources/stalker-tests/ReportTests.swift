@@ -734,6 +734,13 @@ private func timelineRows(_ text: String) -> [String] {
     t.eq(parseArgs(["setup", "--support-dir"]), Command.usageError,
          "with no value it is an error")
 
+    // --- Task 6: uninstall ---
+    t.eq(parseArgs(["uninstall"]), Command.uninstall(purge: false),
+         "uninstall keeps data by default")
+    t.eq(parseArgs(["uninstall", "--purge"]), Command.uninstall(purge: true),
+         "--purge opts into deletion")
+    t.eq(parseArgs(["uninstall", "--wat"]), Command.usageError, "an unknown flag is an error")
+
     // --- the new spans ---
     t.eq(req(["report", "--week"])?.span, ReportRequest.Span.week, "--week selects the week view")
     t.eq(req(["report", "--week", "--date", "2026-09-30"])?.date, "2026-09-30",
