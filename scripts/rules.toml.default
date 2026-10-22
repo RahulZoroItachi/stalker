@@ -68,12 +68,17 @@ category = "fun"
 
 # Path rules are app-independent: they cover terminal directories, Finder
 # folders, and open documents with the same pattern.
+#
+# These two are a guess about your directory layout, and they are the rules most
+# worth editing. Point them at the directories you actually work in, or that time
+# falls through to the default category. Rules apply when a report is generated,
+# so correcting them re-classifies your whole history.
 [[rule]]
-context = "*/Casey/Work/*"
+context = "*/Work/*"
 category = "work"
 
 [[rule]]
-context = "*/Casey/Projects/*"
+context = "*/Projects/*"
 category = "pet-project"
 
 # Zoom is a native app and DOES hold its own assertion, so it is sometimes caught as
