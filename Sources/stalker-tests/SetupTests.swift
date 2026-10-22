@@ -50,6 +50,11 @@ import StalkerCore
     t.eq(resolveSupportDir(executablePath: "/repo/.build/release/stalker", override: nil,
                            exists: { $0 == "/repo/scripts" }),
          "/repo/scripts", "a clone's scripts directory is found")
+    // SwiftPM's real output directory carries the target triple, and `.build/debug`
+    // is only a symlink to it, so a clone has to be found from either depth.
+    t.eq(resolveSupportDir(executablePath: "/repo/.build/arm64-apple-macosx/debug/stalker",
+                           override: nil, exists: { $0 == "/repo/scripts" }),
+         "/repo/scripts", "and is found from the triple-qualified path too")
     // Review Focus 4: nothing found is nil, so the caller can fail loudly naming what it tried.
     t.eq(resolveSupportDir(executablePath: "/x/bin/stalker", override: nil, exists: { _ in false }),
          nil, "nothing found is nil, never a silent default")

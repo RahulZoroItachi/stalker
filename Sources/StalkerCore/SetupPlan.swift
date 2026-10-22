@@ -84,13 +84,16 @@ public func renderPlist(template: String, binaryPath: String) -> String {
 /// Where the support files might be, in the order they are tried.
 ///
 /// Two layouts: installed by Homebrew, where they sit in the formula's share
-/// directory beside `bin`; and run from a clone, where the binary is under
-/// `.build/release` and they are in the repository's `scripts`.
+/// directory beside `bin`; and run from a clone, where they are in the repository's
+/// `scripts`. The clone needs two depths, because SwiftPM's real output directory is
+/// `.build/<target-triple>/release` and `.build/release` is only a symlink to it —
+/// which path a running binary reports depends on how it was launched.
 public func supportDirCandidates(executablePath: String) -> [String] {
     let execDir = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
     return [
         execDir.appendingPathComponent("../share/stalker").standardized.path,
         execDir.appendingPathComponent("../../scripts").standardized.path,
+        execDir.appendingPathComponent("../../../scripts").standardized.path,
     ]
 }
 

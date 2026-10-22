@@ -205,14 +205,14 @@ func runDoctor() -> Int32 {
         }
     }
 
-    print("stalker doctor")
+    print("stalker doctor \(stalkerVersion)")
 
     let fm = FileManager.default
     check(fm.fileExists(atPath: paths.dataDir), "data directory exists",
-          "run scripts/install.sh")
+          "run stalker setup")
     check(fm.isWritableFile(atPath: paths.dataDir), "data directory is writable")
     check(fm.fileExists(atPath: paths.courierDir), "courier directory exists",
-          "run scripts/install.sh")
+          "run stalker setup")
     check(fm.fileExists(atPath: paths.rulesPath), "rules file exists",
           "write \(paths.rulesPath)")
     check(loadRules() != nil, "rules file parses")
@@ -233,6 +233,10 @@ func runDoctor() -> Int32 {
         print("         System Settings → Privacy & Security → Automation → Finder")
     }
 
+    check(sh("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"],
+             quietErrors: true).out.contains("stalker-dev"),
+          "signing certificate exists", "run stalker setup")
+
     // An ad-hoc signature is why a granted Accessibility permission stops working
     // for no visible reason. Its designated requirement is the code hash, so TCC
     // pins the grant to one exact build; the next build is a different program to
@@ -252,7 +256,7 @@ func runDoctor() -> Int32 {
         cs.waitUntilExit()
         check(!dr.contains("cdhash"), "signing identity survives a rebuild",
               "ad-hoc signed: every build invalidates the Accessibility grant while "
-              + "System Settings still shows it enabled. See scripts/install.sh")
+              + "System Settings still shows it enabled. Run stalker setup.")
     }
 
     // Accessibility, judged by what the agent recorded rather than by a live call.
@@ -319,6 +323,7 @@ stalker — local activity tracker
   stalker report     30-minute report, default today
   stalker note       log a block of time the laptop could not see
   stalker doctor     verify permissions and setup
+  stalker setup      install the per-user wiring, safe to re-run
   stalker --version  print the version
 
 report options:
@@ -338,6 +343,7 @@ case .sample:              status = runSample()
 case .report(let r):       status = runReport(r)
 case .note(let a):         status = runNote(a)
 case .doctor:              status = runDoctor()
+case .setup(let d):        status = runSetup(supportDirOverride: d)
 case .version:
     print("stalker \(stalkerVersion)")
     status = 0

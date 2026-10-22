@@ -727,6 +727,13 @@ private func timelineRows(_ text: String) -> [String] {
     t.expect(stalkerVersion.split(separator: ".").count == 3,
              "the version is three dot-separated parts")
 
+    // --- Task 4: setup ---
+    t.eq(parseArgs(["setup"]), Command.setup(supportDir: nil), "setup takes no arguments")
+    t.eq(parseArgs(["setup", "--support-dir", "/x"]), Command.setup(supportDir: "/x"),
+         "and accepts an explicit support directory")
+    t.eq(parseArgs(["setup", "--support-dir"]), Command.usageError,
+         "with no value it is an error")
+
     // --- the new spans ---
     t.eq(req(["report", "--week"])?.span, ReportRequest.Span.week, "--week selects the week view")
     t.eq(req(["report", "--week", "--date", "2026-09-30"])?.date, "2026-09-30",

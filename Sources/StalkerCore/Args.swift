@@ -31,6 +31,9 @@ public enum Command: Equatable, Sendable {
     case report(ReportRequest)
     case note(NoteAction)
     case doctor
+    /// Per-user wiring a Homebrew formula is not allowed to do: the signing
+    /// certificate, the shell hook, and the launchd agents. Spec §4.
+    case setup(supportDir: String?)
     /// The version, so a report from someone else's machine can be placed against
     /// a build. A success, like `help`.
     case version
@@ -49,10 +52,34 @@ public func parseArgs(_ args: [String]) -> Command {
     case "doctor": return .doctor
     case "report": return parseReport(Array(args.dropFirst()))
     case "note": return parseNote(Array(args.dropFirst()))
+    case "setup": return parseSetup(Array(args.dropFirst()))
     case "version", "--version": return .version
     case "help", "--help", "-h": return .help
     default: return .usageError
     }
+}
+
+/// The one flag `setup` takes.
+///
+/// `--support-dir` exists because the support files sit in Homebrew's share
+/// directory when installed and in `scripts/` when run from a clone, and only the
+/// caller knows which. An unknown flag is refused rather than ignored, so a typo
+/// cannot produce a half-finished install that looks like a complete one.
+private func parseSetup(_ args: [String]) -> Command {
+    var dir: String?
+    var i = 0
+    while i < args.count {
+        switch args[i] {
+        case "--support-dir":
+            guard i + 1 < args.count else { return .usageError }
+            i += 1
+            dir = args[i]
+        default:
+            return .usageError
+        }
+        i += 1
+    }
+    return .setup(supportDir: dir)
 }
 
 /// Flags for `report`, in any order.
