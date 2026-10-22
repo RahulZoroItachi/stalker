@@ -192,6 +192,11 @@ func runNote(_ action: NoteAction) -> Int32 {
 
 func runDoctor() -> Int32 {
     var problems = 0
+    func stamp(_ unix: Int) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(unix)))
+    }
     func check(_ ok: Bool, _ label: String, _ hint: String = "") {
         print("  \(ok ? "ok  " : "FAIL") \(label)")
         if !ok {
@@ -250,10 +255,36 @@ func runDoctor() -> Int32 {
               + "System Settings still shows it enabled. See scripts/install.sh")
     }
 
-    // Accessibility, plus the AX latency the spec leaves open as item 1.
+    // Accessibility, judged by what the agent recorded rather than by a live call.
+    // A live call answers for whatever launched this process, so typing
+    // `stalker doctor` in a terminal asks about the terminal. Spec §5.
+    let nowSecs = Int(Date().timeIntervalSince1970)
+    let recent = (try? Store(path: paths.dbPath).intervals(from: nowSecs - 86_400, to: nowSecs)) ?? []
+    switch accessibilityVerdict(recent, now: nowSecs) {
+    case .granted(let at):
+        check(true, "Accessibility granted (agent recorded context at \(stamp(at)))")
+    case .denied(let at):
+        check(false, "Accessibility granted",
+              "the agent recorded a refusal at \(stamp(at)). "
+              + "System Settings → Privacy & Security → Accessibility, add this binary")
+    case .notObserved:
+        // Not a problem. A fresh install has simply not sampled anything yet, and a
+        // FAIL here would read as broken to someone who just granted the permission.
+        print("  ok   Accessibility not yet observed")
+        print("       → nothing recorded in the last 24h either way; re-run after the")
+        print("         agent has sampled a window with in-app context")
+    }
+
+    // Reported, never counted. This is the reading that confuses people, so it is
+    // printed with its explanation instead of left to be rediscovered.
     let trusted = AXIsProcessTrusted()
-    check(trusted, "Accessibility granted",
-          "System Settings → Privacy & Security → Accessibility, add this binary")
+    print("  ok   Accessibility for this process: \(trusted ? "trusted" : "not trusted")")
+    if !trusted {
+        print("       → expected when launched from a shell: the answer describes the")
+        print("         launching process, not this binary. The check above is the real one.")
+    }
+
+    // The AX latency the spec leaves open as item 1.
     if trusted, let f = SystemFocusProbe().frontmost() {
         let probe = AccessibilityContextProbe()
         let t0 = Date()
