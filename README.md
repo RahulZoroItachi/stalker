@@ -100,11 +100,26 @@ that.
 
 ## Building from a clone
 
+Installing with `brew` does not leave you a copy of the source you can edit. It
+downloads a tarball, compiles it in a temporary directory, and deletes that. So to
+change anything, clone the repository:
+
 ```
+brew uninstall stalker          # if you installed that way, to avoid two on PATH
 git clone https://github.com/RahulZoroItachi/stalker
 cd stalker
 ./scripts/install.sh
 ```
 
-That builds, installs to `~/.local/bin/stalker`, and hands over to the same
-`stalker setup`. Tests are `swift run stalker-tests`.
+That builds, stages the binary in `~/.local/bin`, and hands over to the same
+`stalker setup`, which installs and signs the copy the background agent actually
+runs. Tests are `swift run stalker-tests`.
+
+**Your Accessibility grant carries over.** The agent always runs a copy at
+`~/Library/Application Support/stalker/bin/stalker`, whoever built it, and macOS
+keys the permission to that path. So you can move between a Homebrew install and
+your own build, as often as you like, without granting anything again.
+
+The `brew uninstall` is only to keep one `stalker` on your `PATH`. Skip it and both
+exist, and which one you get when you type `stalker` depends on the order of your
+`PATH`, which is a confusing afternoon.
