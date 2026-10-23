@@ -230,9 +230,35 @@ That is the reason §2 specifies a list rather than named labels. The label rena
 specified in the serve design and happens wherever the agent wiring lives at the
 time.
 
-## 10. Open items
+## 10. Settled, by experiment
 
-One, and it is the only thing in this design that is not settled.
+This was the only open item in the design. It was tested against a real published
+tap on 2026-10-22 and 2026-10-23, and the answer changed the design.
+
+**A TCC Accessibility grant is keyed to the resolved real path.** Three measurements:
+
+| What changed | Grant survived |
+|---|---|
+| The symlink's target moved: `/opt/homebrew/bin/stalker` from `Cellar/0.1.0` to `Cellar/0.1.1` | **No.** Three refusals in six minutes, including Slack, with the path and the designated requirement both byte-identical afterwards. |
+| `brew upgrade` with the agent running a fixed real path under the data directory | **Yes.** Granted throughout; the only consequence was the agent being one version behind, which `doctor` reported. |
+| That granted binary overwritten and re-signed in place | **Yes.** A Slack `title` row recorded minutes after the replacement. |
+
+So the certificate covers the binary's *contents* changing at a fixed path, which is
+what kept a `~/.local/bin` install healthy for twenty days. Nothing covers the real
+path moving, and Homebrew moves it on every upgrade.
+
+**The primary specification below was therefore wrong, and the fallback is what
+ships.** `setup` installs its own copy at `~/Library/Application Support/stalker/bin`
+and points the agent there. `doctor` compares that copy's version against the
+formula's, which is the check this section anticipated.
+
+One thing that could not be made automatic: the formula cannot refresh that copy
+after an upgrade, because Homebrew runs post-install steps with an isolated HOME, so
+`security find-identity` reports zero identities instead of one and signing is
+impossible. An upgrade therefore needs one `stalker setup`. It degrades well: the
+agent keeps running the previous copy with its permission intact.
+
+### The original reasoning, kept for the record
 
 **Does a TCC Accessibility grant survive the binary's path changing?** It decides
 where §4 step 2 puts the binary, and getting it wrong means every friend re-grants
